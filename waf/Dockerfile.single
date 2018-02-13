@@ -1,9 +1,13 @@
+ARG VERSION_MOD_SECURITY=3.0.0
+
 FROM ubuntu
 MAINTAINER blaize.net
 
+ARG VERSION_MOD_SECURITY
+
 ADD build.sh /build.sh
 RUN chmod +x /build.sh
-RUN /bin/bash -c "source /build.sh"
+RUN /bin/bash -c "source /build.sh ${VERSION_MOD_SECURITY}"
 
 ADD nginx.conf /usr/local/nginx/conf/nginx.conf
 ADD modsec_includes.conf /usr/local/nginx/conf/modsec_includes.conf

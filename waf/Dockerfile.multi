@@ -1,8 +1,12 @@
+ARG VERSION_MOD_SECURITY=3.0.0
+
 FROM ubuntu
 MAINTAINER blaize.net
 
+ARG VERSION_MOD_SECURITY
+
 COPY build.multi.sh /build.multi.sh
-RUN chmod +x /build.multi.sh && /bin/bash -c "source /build.multi.sh"
+RUN chmod +x /build.multi.sh && /bin/bash -c "source /build.multi.sh ${VERSION_MOD_SECURITY}"
 
 FROM ubuntu
 
@@ -11,7 +15,7 @@ COPY config.multi.sh /config.multi.sh
 COPY --from=0 /usr/src/modsecurity/ /usr/src/modsecurity/
 COPY --from=0 /usr/local/nginx/ /usr/local/nginx/
 
-RUN chmod +x /config.multi.sh && /bin/bash -c "source /config.multi.sh"
+RUN chmod +x /config.multi.sh && /bin/bash -c "source /config.multi.sh ${VERSION_MOD_SECURITY}"
 
 COPY nginx.conf /usr/local/nginx/conf/nginx.conf
 COPY modsec_includes.conf /usr/local/nginx/conf/modsec_includes.conf
