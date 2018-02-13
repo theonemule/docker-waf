@@ -1,11 +1,14 @@
 #!/bin/sh
 #update and install dependencies
+
+VERSION_MOD_SECURITY=$1
+
 apt-get update
 apt-get install -y git wget build-essential libpcre3 libpcre3-dev libssl-dev libtool autoconf apache2-dev libxml2-dev libcurl4-openssl-dev
 
 #make modsecurity
 cd /usr/src/
-git clone https://github.com/SpiderLabs/ModSecurity.git /usr/src/modsecurity
+git clone --depth 1 -b v${VERSION_MOD_SECURITY} --single-branch https://github.com/SpiderLabs/ModSecurity /usr/src/modsecurity
 cd /usr/src/modsecurity
 ./autogen.sh
 ./configure --enable-standalone-module --disable-mlogc
