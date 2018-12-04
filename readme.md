@@ -27,15 +27,6 @@ NGINX, though, is more than merely a web server. It can also act as a load balan
 
 Using the Dockerfile is simple. Change directories to the dockerfile, and build the image.
 
-**UPDATE:** There are two flavors to build this WAF. The Dockerfile.single is a classic Dockerfile Dockerfile.multi is using multi-stage builds in Docker.
-
-Classic:
-
-```
-cp Dockerfile.single Dockerfile
-docker build --tag mywaf .
-```
-
 Multi-Stage Build:
 
 ```
