@@ -1,0 +1,67 @@
+---
+apiVersion: v1
+kind: Service #Service for exposing the WAF externally.
+metadata:
+  name: waf-service
+  labels:
+    app: waf
+spec:
+  ports:
+  - port: 80
+    name: http
+  selector:
+    app: waf
+  type: LoadBalancer
+---
+apiVersion: apps/v1 
+kind: Deployment #Deployment for the WAF. Scale as needed with replicas.
+metadata:
+  name: waf-deployment
+spec:
+  selector:
+    matchLabels:
+      app: waf
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: waf
+    spec:
+      containers:
+      - name: waf
+        image: your.container.registry/waf #insert the reference to your wAF image here.
+        ports:
+        - containerPort: 80
+---
+kind: Service #Service for the app
+apiVersion: v1
+metadata:
+  name: app #This is the name of the reverse proxy used in the nginx.conf file. If you change this, be sure to update your nginx.conf too
+spec:
+  selector:
+    app: app-deployment
+  ports:
+  - protocol: TCP
+    port: 80
+    targetPort: 80
+  type: ClusterIP	
+---
+apiVersion: apps/v1 
+kind: Deployment #Deployment for the app
+metadata:
+  name: app-deployment
+spec:
+  selector:
+    matchLabels:
+      app: app-deployment
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: app-deployment
+    spec:
+      containers:
+      - name: waf
+        image: your.container.registry/app #insert the reference to your image here.
+        ports:
+        - containerPort: 80			
