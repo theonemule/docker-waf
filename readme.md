@@ -30,7 +30,6 @@ Using the Dockerfile is simple. Change directories to the dockerfile, and build 
 Multi-Stage Build:
 
 ```
-cp Dockerfile.multi Dockerfile
 docker build --tag mywaf .
 ```
 
