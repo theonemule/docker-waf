@@ -46,3 +46,13 @@ Also, the image can be used with Docker Compose. The docker-compose.yml isa simp
 ```
 docker-compose up
 ```
+
+### Use with Kubernetes
+
+It is possible to use the WAF with Kubernetes too. In short, you create a deployment and load balancer service with the WAF, then use the WAF to connect to your applicaiton running on a deployment with a a cluster IP service. Reference the kube.yml file in the code for specifics.
+
+Then use `kubectl` to deploy the kube.yml file to your Kubernetes environment.
+
+```
+kubectl create -f kube.yml
+```
