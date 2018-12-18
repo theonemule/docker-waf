@@ -1,7 +1,4 @@
 FROM ubuntu:18.04
-COPY build.multi.sh /build.multi.sh
-# RUN chmod +x /build.multi.sh && /bin/bash -c "source /build.multi.sh"
-
 RUN apt-get update && \
 	apt-get install -y git wget build-essential libpcre3 libpcre3-dev libssl-dev libtool autoconf apache2-dev libxml2-dev libcurl4-openssl-dev automake pkgconf && \
 	cd /usr/src/ && \
@@ -20,10 +17,19 @@ RUN apt-get update && \
 
 
 FROM ubuntu:18.04
-COPY config.multi.sh /config.multi.sh
 COPY --from=0 /usr/src/modsecurity/ /usr/src/modsecurity/
 COPY --from=0 /usr/local/nginx/ /usr/local/nginx/
-RUN chmod +x /config.multi.sh && /bin/bash -c "source /config.multi.sh"
+RUN ln -s /usr/local/nginx/sbin/nginx /bin/nginx && \
+	cp /usr/src/modsecurity/unicode.mapping /usr/local/nginx/conf/ && \
+	mkdir -p /opt/modsecurity/var/audit/ && \
+	apt-get update && \
+	apt-get install -y git libpcre3 libpcre3-dev libssl-dev libtool autoconf apache2-dev libxml2-dev libcurl4-openssl-dev && \
+	git clone https://github.com/SpiderLabs/owasp-modsecurity-crs.git /usr/src/owasp-modsecurity-crs && \
+	cp -R /usr/src/owasp-modsecurity-crs/rules/ /usr/local/nginx/conf/  && \
+	mv /usr/local/nginx/conf/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example  /usr/local/nginx/conf/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf && \
+	mv /usr/local/nginx/conf/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example  /usr/local/nginx/conf/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf && \
+	apt-get purge -y git && \
+	apt-get autoremove -y
 COPY nginx.conf /usr/local/nginx/conf/nginx.conf
 COPY modsec_includes.conf /usr/local/nginx/conf/modsec_includes.conf
 COPY modsecurity.conf /usr/local/nginx/conf/modsecurity.conf
