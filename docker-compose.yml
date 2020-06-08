@@ -1,7 +1,7 @@
 version: '2'
 services:
     waf:
-        build: waf
+        build: waf-3
         ports:
             - "80:80"
     app:

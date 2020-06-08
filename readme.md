@@ -27,6 +27,19 @@ NGINX, though, is more than merely a web server. It can also act as a load balan
 
 Using the Dockerfile is simple. Change directories to the dockerfile, and build the image.
 
+### UPDATE: 6/8/2020
+
+A new folder was added for ModSecurity 3.0
+
+`waf-2` is for ModSecurity 2
+`waf-3` is for ModSecurity 3
+
+Everything else remails the same.
+
+-----
+
+
+
 Multi-Stage Build:
 
 ```

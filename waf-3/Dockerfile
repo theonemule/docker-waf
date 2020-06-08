@@ -17,6 +17,11 @@ RUN apt-get update && \
 	./configure --with-compat --add-dynamic-module=../ModSecurity-nginx && \
 	make modules && \
 	cp objs/ngx_http_modsecurity_module.so /etc/nginx/modules && \
+	cd / && \
+	git clone https://github.com/SpiderLabs/owasp-modsecurity-crs.git  && \
+	cp -R /owasp-modsecurity-crs/rules/ /etc/nginx/  && \
+	mv /etc/nginx/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf.example  /etc/nginx/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf && \
+	mv /etc/nginx/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example  /etc/nginx/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf && \	
 	apt-get remove -y --purge apt-utils autoconf automake build-essential git pkgconf 
 COPY nginx.conf /etc/nginx/nginx.conf
 COPY modsec_includes.conf /etc/nginx/modsec_includes.conf
