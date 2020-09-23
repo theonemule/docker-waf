@@ -28,7 +28,7 @@ COPY nginx.conf /usr/local/nginx/nginx.conf
 COPY modsec_includes.conf /usr/local/nginx/modsec_includes.conf
 COPY modsecurity.conf /usr/local/nginx/modsecurity.conf
 COPY crs-setup.conf /usr/local/nginx/crs-setup.conf
-CMD nginx -g 'daemon off;'
+CMD ./usr/local/nginx/sbin/nginx -g 'daemon off;'
 EXPOSE 80
 	
 	
