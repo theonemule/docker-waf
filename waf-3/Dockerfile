@@ -1,6 +1,6 @@
 FROM ubuntu:18.04
 RUN apt-get update && \
-	apt-get install -y wget tar apt-utils autoconf automake build-essential git libcurl4-openssl-dev libgeoip-dev liblmdb-dev libpcre++-dev libtool libxml2-dev libssl-dev libyajl-dev pkgconf zlib1g-dev && \
+	apt-get install -y wget tar apt-utils autoconf automake build-essential git libcurl4-openssl-dev libgeoip-dev liblmdb-dev libpcre++-dev libtool libxml2 libxml2-dev libssl-dev libyajl-dev pkgconf zlib1g-dev && \
 	git clone --depth 1 -b v3/master --single-branch https://github.com/SpiderLabs/ModSecurity && \
 	cd ModSecurity && \
 	git submodule init && \
@@ -24,10 +24,11 @@ RUN apt-get update && \
 	mv /usr/local/nginx/conf/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf.example  /usr/local/nginx/conf/rules/RESPONSE-999-EXCLUSION-RULES-AFTER-CRS.conf && \
 	apt-get remove -y --purge apt-utils autoconf automake build-essential git pkgconf && \
 	apt-get autoremove -y
-COPY nginx.conf /usr/local/nginx/nginx.conf
-COPY modsec_includes.conf /usr/local/nginx/modsec_includes.conf
-COPY modsecurity.conf /usr/local/nginx/modsecurity.conf
-COPY crs-setup.conf /usr/local/nginx/crs-setup.conf
+COPY nginx.conf /usr/local/nginx/conf/nginx.conf
+COPY modsec_includes.conf /usr/local/nginx/conf/modsec_includes.conf
+COPY modsecurity.conf /usr/local/nginx/conf/modsecurity.conf
+COPY crs-setup.conf /usr/local/nginx/conf/rules/crs-setup.conf
+COPY unicode.mapping /usr/local/nginx/conf/unicode.mapping
 CMD ./usr/local/nginx/sbin/nginx -g 'daemon off;'
 EXPOSE 80
 	
