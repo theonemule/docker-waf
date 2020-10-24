@@ -28,7 +28,6 @@ COPY nginx.conf /usr/local/nginx/conf/nginx.conf
 COPY modsec_includes.conf /usr/local/nginx/conf/modsec_includes.conf
 COPY modsecurity.conf /usr/local/nginx/conf/modsecurity.conf
 COPY crs-setup.conf /usr/local/nginx/conf/rules/crs-setup.conf
-COPY unicode.mapping /usr/local/nginx/conf/unicode.mapping
 CMD ./usr/local/nginx/sbin/nginx -g 'daemon off;'
 EXPOSE 80
 	
