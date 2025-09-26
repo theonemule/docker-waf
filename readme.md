@@ -6,7 +6,7 @@ One can never be too paranoid about online security for a number of reasons. Con
 A [Web Application Firewall (WAF)](https://www.owasp.org/index.php/Web_Application_Firewall) is a purpose-built firewall designed to protect against attacks common to web apps. One of the most widely used WAF’s is [ModSecurity](https://modsecurity.org/). Originally, it was written as a module for the Apache webserver, but it has since been ported to NGINX and IIS. ModSecurity protects against attacks by looking for:
 
 *   SQL Injection
-*   Insuring the content type matches the body data.
+*   Ensuring the content type matches the body data.
 *   Protection against malformed POST requests.
 *   HTTP Protocol Protection
 *   Real-time Blacklist Lookups
@@ -69,3 +69,4 @@ Then use `kubectl` to deploy the kube.yml file to your Kubernetes environment.
 ```
 kubectl create -f kube.yml
 ```
+
