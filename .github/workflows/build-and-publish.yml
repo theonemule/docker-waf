@@ -1,0 +1,173 @@
+name: Build and publish Docker WAF v3
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    tags:
+      - "v3.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/docker-waf
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install validation tools
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Validate source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh; do
+            bash -n "$f"
+          done
+          shellcheck -x install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh
+          ADMIN_PASSWORD=test docker compose config >/dev/null
+
+  build-appliance:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select artifact version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            version="3.0.0-ci.${GITHUB_RUN_NUMBER}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build standalone appliance payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUILD_JOBS=2 ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
+          cp scripts/install-alpine.sh dist/install-alpine.sh
+          cp install.sh dist/install-docker.sh
+          sha256sum dist/install-alpine.sh dist/install-docker.sh > dist/installers.sha256
+
+      - name: Upload standalone appliance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-waf-v3-${{ steps.version.outputs.version }}-x86_64
+          path: |
+            dist/liteedge-linux-musl-x86_64.tar.gz
+            dist/liteedge-linux-musl-x86_64.tar.gz.sha256
+            dist/install-alpine.sh
+            dist/install-docker.sh
+            dist/installers.sha256
+          if-no-files-found: error
+          retention-days: 30
+
+  build-container:
+    needs: build-appliance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download standalone appliance payload
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
+          path: dist
+
+      - name: Build thin runtime image from prebuilt payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --build-arg LITEEDGE_ARCH=x86_64 -t "${IMAGE_NAME}:ci" .
+
+      - name: Smoke test image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name docker-waf-v3-ci \
+            -e ADMIN_USER=admin \
+            -e ADMIN_PASSWORD=test-password \
+            -e LITEEDGE_ADMIN_HTTP_ONLY=1 \
+            -p 18080:8080 \
+            "${IMAGE_NAME}:ci"
+
+          trap 'docker logs docker-waf-v3-ci || true; docker rm -f docker-waf-v3-ci >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ || true)"
+            if [[ "$code" == "401" ]]; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Container did not become healthy." >&2
+          exit 1
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish main image tags
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        run: |
+          set -euo pipefail
+          sha_tag="sha-${GITHUB_SHA:0:12}"
+          for tag in latest v3 "$sha_tag"; do
+            docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:$tag"
+            docker push "${IMAGE_NAME}:$tag"
+          done
+
+      - name: Publish release image tag
+        if: startsWith(github.ref, 'refs/tags/v3.')
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          docker push "${IMAGE_NAME}:${GITHUB_REF_NAME}"
+          docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:v3"
+          docker push "${IMAGE_NAME}:v3"
+
+  publish-release:
+    if: startsWith(github.ref, 'refs/tags/v3.')
+    needs: build-appliance
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
+          path: dist
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "Docker WAF ${GITHUB_REF_NAME}" \
+            --generate-notes
