@@ -1,0 +1,8 @@
+.git
+.github
+archive
+data
+*.log
+dist/*
+!dist/liteedge-linux-musl-*.tar.gz
+!dist/liteedge-linux-musl-*.tar.gz.sha256

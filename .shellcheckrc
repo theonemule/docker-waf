@@ -1,0 +1,2 @@
+# NGINX variables are deliberately emitted as literal $variables by render-nginx.sh.
+disable=SC2016

@@ -1,8 +1,32 @@
-version: '2'
 services:
-    waf:
-        build: waf-3
-        ports:
-            - "80:80"
-    app:
-        build: app
+  liteedge:
+    image: "ghcr.io/theonemule/docker-waf:${LITEEDGE_VERSION:-latest}"
+    container_name: liteedge
+    restart: unless-stopped
+    init: true
+    user: "${LITEEDGE_UID:-10001}:${LITEEDGE_GID:-10001}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    stop_grace_period: 10s
+    ports:
+      - "80:8080"
+      - "443:8443"
+    environment:
+      ADMIN_USER: "${ADMIN_USER:-admin}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}"
+      ACME_EMAIL: "${ACME_EMAIL:-}"
+      TZ: "${TZ:-UTC}"
+      DATA_DIR: /data
+      LITEEDGE_RUN_DIR: /tmp/liteedge-run
+      LITEEDGE_HTTP_PORT: "8080"
+      LITEEDGE_HTTPS_PORT: "8443"
+      LITEEDGE_BIND_ADDRESS: "0.0.0.0"
+      LITEEDGE_PUBLIC_HTTPS_PORT: "443"
+    volumes:
+      - ./data:/data
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=32m,mode=1777

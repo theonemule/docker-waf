@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="LiteEdge"
+description="Lightweight reverse proxy and ModSecurity WAF"
+supervisor="supervise-daemon"
+command="/opt/liteedge/entrypoint.sh"
+command_user="liteedge:liteedge"
+respawn_delay=5
+respawn_max=0
+
+depend() {
+    need net
+    after firewall
+}
