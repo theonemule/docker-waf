@@ -221,7 +221,9 @@ snapshot_import_state() {
     name="${pair%%:*}"
     path="${pair#*:}"
     mkdir -p "$backup/$name"
-    [[ -d "$path" ]] && cp -a "$path/." "$backup/$name/" 2>/dev/null || true
+    if [[ -d "$path" ]]; then
+      cp -a "$path/." "$backup/$name/" 2>/dev/null || true
+    fi
   done
 }
 
