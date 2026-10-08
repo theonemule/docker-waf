@@ -5,8 +5,11 @@ cd "$(dirname "$0")"
 # The released installer has its originating v3 tag baked in by CI. A cloned
 # checkout already has docker-compose.yml and does not need a release download.
 release_tag="${LITEEDGE_INSTALL_RELEASE_TAG:-__LITEEDGE_RELEASE_TAG__}"
+# Split this literal so the release job only replaces the assignment above.
+# Check equality, not substring presence: valid versions can contain the marker text.
+release_placeholder="__LITEEDGE_"'RELEASE_TAG__'
 default_version=latest
-if [[ "$release_tag" != *'LITEEDGE_RELEASE_TAG'* ]]; then
+if [[ "$release_tag" != "$release_placeholder" ]]; then
   [[ "$release_tag" =~ ^v3\.[0-9]+\.[0-9]+([.-][A-Za-z0-9._-]+)?$ ]] || {
     echo "Invalid LiteEdge release tag: $release_tag" >&2
     exit 1
@@ -15,7 +18,7 @@ if [[ "$release_tag" != *'LITEEDGE_RELEASE_TAG'* ]]; then
 fi
 
 if [[ ! -f docker-compose.yml ]]; then
-  if [[ "$release_tag" == *'LITEEDGE_RELEASE_TAG'* ]]; then
+  if [[ "$release_tag" == "$release_placeholder" ]]; then
     echo "docker-compose.yml is missing. Use a repository checkout or a published v3 installer." >&2
     exit 1
   fi
