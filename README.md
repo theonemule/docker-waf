@@ -81,8 +81,14 @@ Clone the repository and run:
     cd docker-waf
     ./install.sh
 
-Alternatively, download `install-docker.sh` from a v3 GitHub Release and run it
-in an empty directory. It downloads and verifies the matching release's
+Alternatively, download `install-docker.sh` from a v3 GitHub Release into an
+empty directory and run it with Bash (downloads do not retain executable
+permissions):
+
+    bash install-docker.sh
+
+To run it directly with `./install-docker.sh`, first use
+`chmod +x install-docker.sh`. It downloads and verifies the matching release's
 `docker-compose.yml` before installing. Released installers default to their
 own versioned image tag; repository checkouts default to `latest`. Set
 `LITEEDGE_REPO=OWNER/REPO` to use a different GHCR repository and release source.
