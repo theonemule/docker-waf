@@ -37,12 +37,13 @@ command -v apk >/dev/null 2>&1 || {
 }
 
 case "$(uname -m)" in
-  x86_64|aarch64) ARCH="$(uname -m)" ;;
+  x86_64) ARCH=x86_64 ;;
+  aarch64) echo "aarch64 release artifacts are not published yet; this installer supports x86_64 only." >&2; exit 1 ;;
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
 apk add --no-cache \
-  bash ca-certificates curl openssl \
+  bash ca-certificates curl openssl tzdata \
   fcgiwrap spawn-fcgi \
   pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb \
   coreutils diffutils patch lua5.3-libs jq libcap openrc

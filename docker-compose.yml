@@ -1,6 +1,6 @@
 services:
   liteedge:
-    image: "ghcr.io/theonemule/docker-waf:${LITEEDGE_VERSION:-latest}"
+    image: "ghcr.io/${LITEEDGE_REPO:-theonemule/docker-waf}:${LITEEDGE_VERSION:-latest}"
     container_name: liteedge
     restart: unless-stopped
     init: true
@@ -20,6 +20,7 @@ services:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}"
       ACME_EMAIL: "${ACME_EMAIL:-}"
       TZ: "${TZ:-UTC}"
+      LITEEDGE_ADMIN_HTTP_ONLY: "${LITEEDGE_ADMIN_HTTP_ONLY:-0}"
       DATA_DIR: /data
       LITEEDGE_RUN_DIR: /tmp/liteedge-run
       LITEEDGE_HTTP_PORT: "8080"

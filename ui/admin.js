@@ -69,6 +69,9 @@
       const params = new URLSearchParams();
       const certBox = siteForm.querySelector('input[name="certificates"]');
       params.set("certificates", certBox && certBox.checked ? "1" : "0");
+      // Site imports must identify the expected site, not auto-detect an all-sites bundle.
+      if (siteForm.dataset.scope) params.set("scope", siteForm.dataset.scope);
+      if (siteForm.dataset.host) params.set("host", siteForm.dataset.host);
       await uploadRaw(siteForm, "/admin/import?" + params.toString());
       return;
     }

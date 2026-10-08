@@ -34,6 +34,13 @@ jobs:
           shellcheck -x install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh
           ADMIN_PASSWORD=test docker compose config >/dev/null
 
+      - name: Test installer and import contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tests/test-deployment.sh
+          node tests/test-ui-import.js
+
   build-appliance:
     needs: validate
     runs-on: ubuntu-latest
@@ -62,8 +69,12 @@ jobs:
           set -euo pipefail
           BUILD_JOBS=2 ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
           cp scripts/install-alpine.sh dist/install-alpine.sh
-          cp install.sh dist/install-docker.sh
-          sha256sum dist/install-alpine.sh dist/install-docker.sh > dist/installers.sha256
+          # Bind the published installer to the exact release's Compose asset.
+          sed "s/__LITEEDGE_RELEASE_TAG__/v${{ steps.version.outputs.version }}/g" install.sh > dist/install-docker.sh
+          chmod +x dist/install-docker.sh
+          cp docker-compose.yml dist/docker-compose.yml
+          (cd dist && sha256sum docker-compose.yml > docker-compose.yml.sha256)
+          (cd dist && sha256sum install-alpine.sh install-docker.sh > installers.sha256)
 
       - name: Upload standalone appliance artifacts
         uses: actions/upload-artifact@v4
@@ -74,6 +85,8 @@ jobs:
             dist/liteedge-linux-musl-x86_64.tar.gz.sha256
             dist/install-alpine.sh
             dist/install-docker.sh
+            dist/docker-compose.yml
+            dist/docker-compose.yml.sha256
             dist/installers.sha256
           if-no-files-found: error
           retention-days: 30
@@ -150,7 +163,7 @@ jobs:
 
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v3.')
-    needs: build-appliance
+    needs: [build-appliance, build-container]
     runs-on: ubuntu-latest
     permissions:
       contents: write

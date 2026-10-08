@@ -42,8 +42,10 @@ Each release asset contains the complete LiteEdge runtime under /opt/liteedge:
 
 The source build is pinned in build/versions.env. scripts/build-release.sh
 performs a serial Alpine build by default so it also works on small build hosts.
-The release workflow publishes the generated tarball and SHA-256 checksum for
-version tags.
+The release workflow publishes the generated tarball, SHA-256 checksum,
+version-bound Docker installer, and Compose file with checksum for version tags.
+Currently, release assets and the runtime image target x86_64 only; Alpine
+aarch64 installation is rejected until native aarch64 assets are published.
 
 ## Features
 
@@ -76,8 +78,14 @@ No cron daemon or systemd is required inside the container.
 Clone the repository and run:
 
     git clone https://github.com/theonemule/docker-waf.git
-    cd LiteEdge
+    cd docker-waf
     ./install.sh
+
+Alternatively, download `install-docker.sh` from a v3 GitHub Release and run it
+in an empty directory. It downloads and verifies the matching release's
+`docker-compose.yml` before installing. Released installers default to their
+own versioned image tag; repository checkouts default to `latest`. Set
+`LITEEDGE_REPO=OWNER/REPO` to use a different GHCR repository and release source.
 
 On first run the installer creates .env, generates a random admin password,
 prepares the persistent data directory for the unprivileged container user, pulls

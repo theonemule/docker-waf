@@ -998,13 +998,27 @@ handle_export() {
 }
 
 handle_raw_import() {
-  local certificates length tmp output size
+  local certificates length tmp output size expected_scope expected_host
   [[ "${REQUEST_METHOD:-GET}" == POST ]] || {
     printf 'Status: 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPOST required.\n'
     exit 0
   }
 
   certificates="$(bool_value "${PARAM[certificates]:-0}")"
+  expected_scope="${PARAM[scope]:-}"
+  expected_host="${PARAM[host]:-}"
+  # The global import allows manifest auto-detection. A scoped import must
+  # constrain both scope and host before any files can be replaced.
+  if [[ -n "$expected_scope" || -n "$expected_host" ]]; then
+    if [[ "$expected_scope" != site || -z "$expected_host" ]]; then
+      printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nA scoped import requires scope=site and a host.\n'
+      exit 0
+    fi
+    if ! [[ "$expected_host" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+      printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nInvalid import host.\n'
+      exit 0
+    fi
+  fi
   length="${CONTENT_LENGTH:-0}"
   [[ "$length" =~ ^[0-9]+$ ]] || length=0
   if (( length < 1 || length > 33554432 )); then
@@ -1021,9 +1035,9 @@ handle_raw_import() {
     exit 0
   fi
 
-  # Scope and site identity come from the signed-off LiteEdge bundle manifest.
-  # Empty expected-scope/host values intentionally enable auto-detection.
-  if ! output="$(/opt/liteedge/bin/bundlectl.sh import "$tmp/bundle.tar.gz" "$certificates" "" "" 2>&1)"; then
+  # The bundle manifest is validated against the caller's expected scope and
+  # host by bundlectl before any changes are applied.
+  if ! output="$(/opt/liteedge/bin/bundlectl.sh import "$tmp/bundle.tar.gz" "$certificates" "$expected_scope" "$expected_host" 2>&1)"; then
     printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
     printf '%s\n' "$output"
     exit 0
