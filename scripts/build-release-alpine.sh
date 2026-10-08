@@ -132,6 +132,7 @@ bash
 ca-certificates
 curl
 openssl
+tzdata
 fcgiwrap
 spawn-fcgi
 pcre2
