@@ -13,7 +13,7 @@ out='' url=''
 while (( $# )); do
   if [[ "$1" == -o ]]; then out="$2"; shift 2; else url="$1"; shift; fi
 done
-[[ "$url" == "https://github.com/acme/my-image/releases/download/v3.4.5/"* ]] || exit 4
+[[ "$url" == "https://github.com/acme/my-image/releases/download/${FAKE_RELEASE_TAG:-v3.4.5}/"* ]] || exit 4
 cp "$FAKE_RELEASE_DIR/${url##*/}" "$out"
 MOCK_CURL
 cat > "$TMP/bin/docker" <<'MOCK_DOCKER'
@@ -34,6 +34,23 @@ grep -qx 'LITEEDGE_VERSION=v3.4.5' "$TMP/install/.env"
 grep -qx 'LITEEDGE_REPO=acme/my-image' "$TMP/install/.env"
 grep -qx 'compose pull' "$TMP/docker.log"
 grep -qx 'compose up -d' "$TMP/docker.log"
+
+# Regression: a valid release tag containing the placeholder's text must not
+# be confused with the unexpanded source sentinel. Run as a download would:
+# non-executable file invoked with Bash.
+for tag in v3.4.5-LITEEDGE_RELEASE_TAG v3.4.5-__LITEEDGE_RELEASE_TAG__; do
+  mkdir -p "$TMP/$tag"
+  sed "s/__LITEEDGE_RELEASE_TAG__/$tag/g" "$ROOT/install.sh" > "$TMP/$tag/install-docker.sh"
+  chmod 0644 "$TMP/$tag/install-docker.sh"
+  (
+    cd "$TMP/$tag"
+    FAKE_RELEASE_TAG="$tag" FAKE_RELEASE_DIR="$TMP/release" FAKE_DOCKER_LOG="$TMP/docker-$tag.log" \
+      LITEEDGE_REPO=acme/my-image PATH="$TMP/bin:$PATH" bash install-docker.sh >/dev/null
+  )
+  cmp "$TMP/release/docker-compose.yml" "$TMP/$tag/docker-compose.yml"
+  grep -Fxq "LITEEDGE_VERSION=$tag" "$TMP/$tag/.env"
+  grep -Fxq 'compose pull' "$TMP/docker-$tag.log"
+done
 
 # A bad checksum must abort before installation and must not install the Compose file.
 printf '0000000000000000000000000000000000000000000000000000000000000000  docker-compose.yml\n' > "$TMP/release/docker-compose.yml.sha256"
