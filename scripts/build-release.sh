@@ -25,7 +25,7 @@ rm -f "$ROOT/dist/liteedge-linux-musl-"*.tar.gz "$ROOT/dist/liteedge-linux-musl-
   -e BUILD_JOBS="$BUILD_JOBS" \
   -v "$ROOT:/src" \
   -w /src \
-  "alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}" \
+  "${ALPINE_BUILD_IMAGE:-public.ecr.aws/docker/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}}" \
   /bin/sh /src/scripts/build-release-inner.sh
 echo
 echo "Release artifacts:"
