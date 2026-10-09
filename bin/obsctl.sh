@@ -81,7 +81,7 @@ save_collector() {
 }
 
 add_alert() {
-  local id="${1:-}" name="${2:-}" type="${3:-}" host="${4:-}" route="${5:-}" method="${6:-}" status="${7:-}" action="${8:-}" threshold="${9:-1}" window="${10:-60}" cooldown="${11:-300}" channel="${12:-webhook}" target="${13:-}" search="${14:-}"
+  local id="${1:-}" name="${2:-}" type="${3:-}" host="${4:-}" route="${5:-}" method="${6:-}" status="${7:-}" action="${8:-}" threshold="${9:-1}" window="${10:-60}" cooldown="${11:-300}" channel="${12:-webhook}" target="${13:-}" search="${14:-}" scopes_json="${15:-}"
   [[ "$id" =~ ^[A-Za-z0-9_-]{1,48}$ && ${#name} -le 100 && -n "$name" ]] || die 'Invalid alert ID or name.'
   [[ "$type" == all || "$type" == waf || "$type" == http ]] || die 'Invalid event type.'
   [[ "$action" == any || "$action" == blocked || "$action" == matched ]] || die 'Invalid WAF action.'
@@ -92,7 +92,29 @@ add_alert() {
   if ! { [[ "$cooldown" =~ ^[0-9]{1,6}$ ]] && (( 10#$cooldown >= 10 && 10#$cooldown <= 604800 )); }; then die 'Invalid cooldown.'; fi
   [[ -z "$status" || "$status" =~ ^[1-5][0-9]{2}$ || "$status" =~ ^[1-5]xx$ ]] || die 'Invalid status.'
   [[ -z "$method" || "$method" =~ ^[A-Z]{1,12}$ ]] || die 'Invalid method.'
-  jq -n --arg id "$id" --arg name "$name" --arg type "$type" --arg host "$host" --arg route "$route" --arg method "$method" --arg status "$status" --arg action "$action" --argjson threshold "$threshold" --argjson window "$window" --argjson cooldown "$cooldown" --arg channel "$channel" --arg target "$target" --arg search "$search" '{id:$id,name:$name,type:$type,host:$host,route:$route,method:$method,status:$status,action:$action,threshold:$threshold,window:$window,cooldown:$cooldown,channel:$channel,target:$target,search:$search,enabled:true}' > "$OBS_DIR/.alert-new.json"
+  # New rules use typed, inventory-validated per-host route scopes; old scalar
+  # host/route definitions continue to work unchanged for existing alert rules.
+  if [[ -n "$scopes_json" ]]; then
+    [[ ${#scopes_json} -le 16384 ]] || die 'Too many host/route selections.'
+    local catalog
+    catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+    if ! jq -en --argjson scopes "$scopes_json" --argjson catalog "$catalog" '
+       ($scopes | type == "array" and length <= 100 and
+         all(.[]; type == "object" and ((.host // null)|type)=="string" and
+           ((.site // null)|type)=="string" and ((.routes // null)|type)=="array" and
+           (.routes|length)<=200 and all(.routes[]; type=="string")))
+       and all($scopes[]; . as $scope |
+         any($catalog.hosts[]; .name==$scope.host and .site==$scope.site) and
+         all($scope.routes[]; . as $route |
+           any($catalog.routes[]; .site==$scope.site and .route==$route)))
+       ' >/dev/null; then
+      die 'Selected hosts, aliases, or routes are not valid for the current sites.'
+    fi
+  fi
+  jq -n --arg id "$id" --arg name "$name" --arg type "$type" --arg host "$host" --arg route "$route" --arg method "$method" --arg status "$status" --arg action "$action" --argjson threshold "$threshold" --argjson window "$window" --argjson cooldown "$cooldown" --arg channel "$channel" --arg target "$target" --arg search "$search" --arg scopes "${scopes_json:-}"     '{id:$id,name:$name,type:$type,host:(if $scopes=="" then $host else "" end),route:(if $scopes=="" then $route else "" end),
+      scopes:(if $scopes=="" then null else ($scopes|fromjson) end),
+      routes_limited:(if $scopes=="" then false else ([($scopes|fromjson)[] | .routes[]]|length)>0 end),
+      method:$method,status:$status,action:$action,threshold:$threshold,window:$window,cooldown:$cooldown,channel:$channel,target:$target,search:$search,enabled:true}' > "$OBS_DIR/.alert-new.json"
   jq --slurpfile rule "$OBS_DIR/.alert-new.json" 'map(select(.id != $rule[0].id)) + $rule' "$ALERTS" | atomic_file "$ALERTS"
   rm -f "$OBS_DIR/.alert-new.json"
 }

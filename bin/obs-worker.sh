@@ -132,17 +132,38 @@ notify_alert() {
   return "$result"
 }
 
-alert_matches() {
-  local event="$1" rule="$2"
-  jq -en --argjson e "$event" --argjson r "$rule" '
-    ($r.type=="all" or $e.type==$r.type)
-    and ($r.host=="" or $r.host==$e.host)
-    and ($r.route=="" or $r.route==$e.route)
+# One shared matcher for both alert trigger detection and rolling counts.
+# Persisted scope entries resolve aliases to their owning site. For legacy
+# alerts without scopes the previous scalar host/route behavior is preserved.
+ALERT_MATCH_JQ='
+  def route_matches($name):
+    . as $event
+    | (($event.route // "") == $name)
+      or (if ($name | startswith("prefix:")) then
+            (($event.uri // "") | startswith($name[7:]))
+          elif ($name | startswith("exact:")) then
+            (($event.uri // "") == $name[6:])
+          elif ($name | startswith("regex:")) then
+            try (($event.uri // "") | test($name[6:])) catch false
+          else false end);
+  def matches_alert($r):
+    . as $e
+    | ($r.type=="all" or $e.type==$r.type)
+    and (if ($r.scopes | type)=="array" then
+           (($r.scopes | length)==0 or
+            any($r.scopes[];
+              .host==$e.host and
+              (($r.routes_limited // false)==false or
+               any(.routes[]; . as $selected_route | $e | route_matches($selected_route)))))
+         else ($r.host=="" or $r.host==$e.host) and ($r.route=="" or $r.route==$e.route) end)
     and ($r.method=="" or $r.method==$e.method)
     and ($r.status=="" or (if ($r.status|endswith("xx")) then (($e.status|tostring)|startswith($r.status[0:1])) else ($e.status|tostring)==$r.status end))
     and ($r.action=="any" or $e.action==$r.action)
-    and ($r.search=="" or (($e|tostring|ascii_downcase)|contains($r.search|ascii_downcase)))
-  ' >/dev/null
+    and ($r.search=="" or (($e|tostring|ascii_downcase)|contains($r.search|ascii_downcase)));
+'
+alert_matches() {
+  local event="$1" rule="$2"
+  jq -en --argjson event "$event" --argjson rule "$rule"     "$ALERT_MATCH_JQ \$event | matches_alert(\$rule)" >/dev/null
 }
 
 process_alerts() {
@@ -164,7 +185,8 @@ process_alerts() {
     fi
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     (( now - last >= cooldown )) || continue
-    count="$(tail -n 10000 "$EVENTS_FILE" | jq -c --argjson since "$((now-window))" 'select(((.epoch // 0)|tonumber) >= $since)' | jq -sc --argjson r "$rule" '[.[] | select(($r.type=="all" or .type==$r.type) and ($r.host=="" or .host==$r.host) and ($r.route=="" or .route==$r.route) and ($r.method=="" or .method==$r.method) and ($r.status=="" or (if ($r.status|endswith("xx")) then ((.status|tostring)|startswith($r.status[0:1])) else (.status|tostring)==$r.status end)) and ($r.action=="any" or .action==$r.action) and ($r.search=="" or ((.|tostring|ascii_downcase)|contains($r.search|ascii_downcase))))] | length')"
+    count="$(tail -n 10000 "$EVENTS_FILE" | jq -sc --argjson since "$((now-window))" --argjson rule "$rule"       "$ALERT_MATCH_JQ [ .[] | select(((.epoch // 0)|tonumber) >= \$since) | select(matches_alert(\$rule)) ] | length")"
+
     if (( count >= threshold )); then
       if notify_alert "$rule" "$count" "$first"; then
         printf '%s\n' "$now" > "$OBS_DIR/alert-$id.last"

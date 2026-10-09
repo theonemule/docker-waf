@@ -295,3 +295,19 @@ with delivery cursors and alert cooldown state persisted under `/data/observabil
 
 Run `bash tests/test-observability.sh` to exercise filtering, synthetic WAF
 normalization, alert delivery/cooldown, redaction and collector validation.
+
+### Inventory-backed alert scopes
+
+The Alerts editor uses multi-select dropdowns populated from the configured site
+inventory. Select one or more site hostnames or aliases; the route dropdown then
+shows only the NGINX locations or managed routes associated with those sites.
+A selected alias filters events by that actual requested hostname, while route
+choices remain associated with their owning site. The editor supports editing
+existing rules. No host selection means any host, and no route selection means
+any route for the selected hosts; choosing routes narrows alerts to the selected
+host-and-route combinations. For migrated NGINX sites, route definitions are
+also discovered from the saved `location` blocks, even if `.route` files have
+not been created. Paths are matched for prefix/exact patterns when the migrated
+NGINX configuration does not emit explicit route labels. Selections are validated
+against the server-side inventory on save, and older scalar host/route rules
+continue matching as before. Test via `bash tests/test-alert-selectors.sh`.
