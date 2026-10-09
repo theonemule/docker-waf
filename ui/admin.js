@@ -275,5 +275,50 @@
       scope.site === item.dataset.site && Array.isArray(scope.routes) && scope.routes.includes(item.value));
   });
   updatePickers();
-  form.addEventListener("submit", updatePickers);
+  const submitButton = document.getElementById("logSearchButton");
+  const spinner = document.getElementById("logSearchSpinner");
+  const buttonLabel = document.getElementById("logSearchButtonLabel");
+  const feedback = document.getElementById("logSearchFeedback");
+  function hasSearchFilter() {
+    return checked(hostChecks).length > 0 ||
+      Array.from(form.querySelectorAll('input[name], select[name]')).some((control) => {
+        const value = String(control.value || "").trim();
+        if (["apply", "scopes_json", "limit"].includes(control.name)) return false;
+        if (control.name === "type") return value !== "" && value !== "all";
+        if (control.name === "since") return Number(value) > 0;
+        return value !== "";
+      });
+  }
+  form.addEventListener("submit", (event) => {
+    updatePickers();
+    if (!hasSearchFilter()) {
+      event.preventDefault();
+      if (feedback) {
+        feedback.hidden = false;
+        feedback.className = "small mt-3 text-danger";
+        feedback.textContent = "Choose at least one filter before searching.";
+      }
+      return;
+    }
+    form.setAttribute("aria-busy", "true");
+    if (submitButton) submitButton.disabled = true;
+    if (spinner) { spinner.hidden = false; spinner.classList.remove("d-none"); }
+    if (buttonLabel) buttonLabel.textContent = "Searching…";
+    if (feedback) {
+      feedback.hidden = false;
+      feedback.className = "small mt-3 text-primary";
+      feedback.textContent = "Searching logs. Please wait…";
+    }
+  });
+  // Browsers can restore a previous page from BFCache; never leave the button
+  // in an in-progress state after navigating back to the filter form.
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("pageshow", () => {
+      form.removeAttribute("aria-busy");
+      if (submitButton) submitButton.disabled = false;
+      if (spinner) { spinner.hidden = true; spinner.classList.add("d-none"); }
+      if (buttonLabel) buttonLabel.textContent = "Search logs";
+      if (feedback && !feedback.classList.contains("text-danger")) feedback.hidden = true;
+    });
+  }
 })();

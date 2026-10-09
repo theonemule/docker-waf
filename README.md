@@ -384,3 +384,38 @@ configuration, not solely by a one-time startup patch. Remove the legacy
 one-time map injection from a migrated custom entrypoint before deploying this
 change. This prevents OWASP CRS updates from losing $allow_access and other
 custom variables.
+
+### Management regression suite and deliberate Logs loading
+
+CI runs fast backend validation and test fixtures, then builds the appliance
+and executes **the management HTTP regression suite against a disposable,
+authenticated Docker container** before publishing the image. Tests exercise
+all 31 current management POST actions (using isolated mocked backends for
+network/destructive actions), real site/route CRUD, server settings, alerts,
+collector configuration, certificate-contact validation, authentication,
+unsafe-input rejection, raw import/export method restrictions, filterable HTTP
+and WAF log events, CSV and JSONL exports. A route-contract test fails when a
+POST handler is added or removed without updating the HTTP regression matrix.
+
+Run locally with a built container image:
+
+```bash
+bash tests/test-http-api-regression.sh ghcr.io/theonemule/docker-waf:latest
+python3 tests/test-http-api-coverage.py
+node tests/test-logs-ui.js
+```
+
+The API test container has **no mount of production data**, and the fast
+non-container test suite runs before building the image. Calls that would
+contact the CA, fetch CRS updates, or reach external notification systems are
+stubbed in the HTTP *dispatcher* phase; the actual certificate/CRS/alerts
+implementations retain their separate backend tests. This is broad automated
+regression coverage, not a substitute for a dedicated end-to-end test against
+external ACME and notification providers.
+
+Opening **Logs** no longer queries event files. Choose at least one hostname,
+event type, status, method, port, timestamp or text filter and then click
+**Search logs**. An accessible loading state appears during the request, and
+results/empty states render after it completes. Blank queries, including blank
+CSV/JSONL exports, are rejected. Search state and selected hosts/routes are
+retained across filter submissions and browser Back navigation.
