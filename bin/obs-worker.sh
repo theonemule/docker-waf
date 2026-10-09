@@ -16,7 +16,9 @@ mkdir -p "$OBS_DIR" "$DATA_DIR/logs"
 # Cursors are persistent. On truncation/rotation, restart at byte zero.
 read_new_lines() {
   local input="$1" cursor="$2" output="$3" offset=0 size=0 consumed=0 line
-  [[ -f "$cursor" ]] && read -r offset < "$cursor" || true
+  if [[ -f "$cursor" ]]; then
+    read -r offset < "$cursor" || true
+  fi
   [[ "$offset" =~ ^[0-9]+$ ]] || offset=0
   [[ -f "$input" ]] || { : > "$output"; return 0; }
   size="$(wc -c < "$input")"
@@ -157,7 +159,9 @@ process_alerts() {
     done < "$batch"
     [[ -n "$first" ]] || continue
     last=0
-    [[ -f "$OBS_DIR/alert-$id.last" ]] && read -r last < "$OBS_DIR/alert-$id.last" || true
+    if [[ -f "$OBS_DIR/alert-$id.last" ]]; then
+      read -r last < "$OBS_DIR/alert-$id.last" || true
+    fi
     [[ "$last" =~ ^[0-9]+$ ]] || last=0
     (( now - last >= cooldown )) || continue
     count="$(tail -n 10000 "$EVENTS_FILE" | jq -c --argjson since "$((now-window))" 'select(((.epoch // 0)|tonumber) >= $since)' | jq -sc --argjson r "$rule" '[.[] | select(($r.type=="all" or .type==$r.type) and ($r.host=="" or .host==$r.host) and ($r.route=="" or .route==$r.route) and ($r.method=="" or .method==$r.method) and ($r.status=="" or (if ($r.status|endswith("xx")) then ((.status|tostring)|startswith($r.status[0:1])) else (.status|tostring)==$r.status end)) and ($r.action=="any" or .action==$r.action) and ($r.search=="" or ((.|tostring|ascii_downcase)|contains($r.search|ascii_downcase))))] | length')"
