@@ -127,8 +127,9 @@
       return;
     }
     const button = form.querySelector('button[type="submit"]');
-    if (button) button.disabled = true;
+    if (button) { button.disabled = true; button.setAttribute("aria-busy", "true"); }
     showStatus(form, "Importing and validating…", false);
+    notify("Importing and validating bundle…", "info", true);
     try {
       const response = await fetch(endpoint, {
         method: "POST",
@@ -138,11 +139,14 @@
       const text = await response.text();
       if (!response.ok) throw new Error(text || "Import failed.");
       showStatus(form, text || "Import complete.", false);
+      try { sessionStorage.setItem(flashKey, JSON.stringify({ message: "Import completed successfully.", kind: "success" })); } catch (_) {}
+      notify("Import completed. Refreshing…", "success", true);
       window.location.assign(form.dataset.redirect || "/");
     } catch (error) {
       showStatus(form, error.message || String(error), true);
+      notify("Import failed: " + (error.message || String(error)), "danger", true);
     } finally {
-      if (button) button.disabled = false;
+      if (button) { button.disabled = false; button.removeAttribute("aria-busy"); }
     }
   }
 
