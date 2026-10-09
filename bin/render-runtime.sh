@@ -92,6 +92,13 @@ sed \
   -e "s|@SEND_TIMEOUT@|$SEND_TIMEOUT|g" \
   /opt/liteedge/etc/nginx/nginx.conf | replace_file "$NGINX_CONF"
 
+# Imported NGINX vhosts rely on shared maps and rate-limit zones.
+# Regenerate the optional include on *every* config update, including CRS.
+if [[ -s "$DATA_DIR/migration/maps.conf" ]]; then
+  map_file="$DATA_DIR/migration/maps.conf"
+  sed -i "/^[[:space:]]*include .*\/nginx\/admin\.conf;$/i\    include $map_file;" "$NGINX_CONF"
+fi
+
 admin_template=/opt/liteedge/etc/nginx/admin.conf.template
 if [[ "${LITEEDGE_ADMIN_HTTP_ONLY:-0}" == 1 ]]; then
   admin_template=/opt/liteedge/etc/nginx/admin-http.conf.template
