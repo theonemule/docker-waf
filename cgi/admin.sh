@@ -1107,17 +1107,44 @@ log_query() {
   /opt/liteedge/bin/obsctl.sh query "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[port]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[search]:-}" "${PARAM[limit]:-100}" "${PARAM[since]:-0}" "${PARAM[scopes_json]:-}"
 }
 
+# A deliberate request with at least one real filter is required before
+# opening the event log; limits and an empty host scope are not filters.
+log_has_filter() {
+  [[ -n "${PARAM[host]:-}" || -n "${PARAM[route]:-}" ||
+     -n "${PARAM[port]:-}" || -n "${PARAM[method]:-}" ||
+     -n "${PARAM[status]:-}" || -n "${PARAM[search]:-}" ||
+     "${PARAM[type]:-all}" != all ||
+     "${PARAM[since]:-0}" =~ ^0*[1-9][0-9]*$ ||
+     ( -n "${PARAM[scopes_json]:-}" && "${PARAM[scopes_json]:-}" != '[]' ) ]]
+}
+
 logs_page() {
   local events event kind badge_color type port method status search limit since catalog item name site route_value
   type="$(html_escape "${PARAM[type]:-all}")"
   catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
   port="$(html_escape "${PARAM[port]:-}")"; method="$(html_escape "${PARAM[method]:-}")"; status="$(html_escape "${PARAM[status]:-}")"
   search="$(html_escape "${PARAM[search]:-}")"; limit="$(html_escape "${PARAM[limit]:-100}")"; since="$(html_escape "${PARAM[since]:-0}")"
-  if ! events="$(log_query 2>&1)"; then error_page "$events"; fi
+  local requested=0 valid_filter=0 result_count=0
+  [[ "${PARAM[apply]:-}" == 1 ]] && requested=1
+  if log_has_filter; then valid_filter=1; fi
+  # Never open event logs on the initial GET, or for a request with no filter.
+  events=""
+  if (( requested && valid_filter )); then
+    if ! events="$(log_query 2>&1)"; then error_page "$events"; fi
+    if [[ -n "$events" ]]; then result_count="$(printf '%s\n' "$events" | wc -l)"; fi
+  fi
   page_head "Logs"
   cat <<HTML
-<div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">Request and WAF logs</h1><p class="text-secondary mb-0">Structured requests, rule matches, blocked attacks and HTTP errors.</p></div><div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="/admin/logs/export?format=jsonl&amp;$(html_escape "${QUERY_STRING:-}")">Export JSONL</a><a class="btn btn-outline-secondary" href="/admin/logs/export?format=csv&amp;$(html_escape "${QUERY_STRING:-}")">Export CSV</a></div></div>
-<form action="/admin/logs" method="get" id="logFilterForm" class="card mb-3 shadow-sm" data-log-initial-scopes="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="scopes_json" value="$(html_escape "${PARAM[scopes_json]:-[]}")"><div class="card-body"><div class="row g-2">
+<div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">Request and WAF logs</h1><p class="text-secondary mb-0">Choose filters, then click Search logs. Opening this page does not query the event store.</p></div><div class="d-flex gap-2">
+HTML
+  if (( requested && valid_filter )); then
+    cat <<HTML
+<a class="btn btn-outline-secondary" href="/admin/logs/export?format=jsonl&amp;$(html_escape "${QUERY_STRING:-}")">Export JSONL</a><a class="btn btn-outline-secondary" href="/admin/logs/export?format=csv&amp;$(html_escape "${QUERY_STRING:-}")">Export CSV</a>
+HTML
+  fi
+  cat <<HTML
+</div></div>
+<form action="/admin/logs" method="get" id="logFilterForm" class="card mb-3 shadow-sm" data-log-initial-scopes="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="scopes_json" value="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="apply" value="1"><div class="card-body"><div class="row g-2">
 <div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">All</option><option value="http">HTTP</option><option value="waf">WAF rules</option></select></div>
 <div class="col-md-5"><label class="form-label" for="logHostButton">Hosts and aliases</label><div class="position-relative" data-log-picker="hosts">
 <button class="form-select text-start" type="button" id="logHostButton" data-log-toggle="hosts" aria-expanded="false" aria-controls="logHostOptions">All hosts (select to filter)</button>
@@ -1151,8 +1178,26 @@ HTML
 <div class="col-md-6"><label class="form-label">Search text</label><input class="form-control" name="search" value="$search" placeholder="Path, rule ID, message, IP or request ID"></div>
 <div class="col-md-2"><label class="form-label">Since (Unix seconds)</label><input class="form-control" type="number" min="0" name="since" value="$since"></div>
 <div class="col-md-2"><label class="form-label">Max results</label><input class="form-control" type="number" min="1" max="1000" name="limit" value="$limit"></div>
-<div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100">Filter logs</button></div>
-</div></div></form>
+<div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit" id="logSearchButton"><span id="logSearchSpinner" class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true" hidden></span><span id="logSearchButtonLabel">Search logs</span></button></div>
+</div><div id="logSearchFeedback" role="status" aria-live="polite" class="small mt-3 text-secondary" hidden>Searching logs. Please wait…</div></div></form>
+HTML
+  if (( !requested )); then
+    echo '<div class="alert alert-info" role="status">No log search has run. Select at least one filter and choose <strong>Search logs</strong> to load results.</div>'
+    page_tail
+    return
+  fi
+  if (( !valid_filter )); then
+    echo '<div class="alert alert-warning" role="status">Choose at least one filter (such as a hostname, event type, HTTP status, or search term) before searching. No logs were loaded.</div>'
+    page_tail
+    return
+  fi
+  if (( result_count == 0 )); then
+    echo '<div class="alert alert-info" role="status">No log entries matched your filters. Try broadening the search.</div>'
+    page_tail
+    return
+  fi
+  printf '<p class="small text-secondary" role="status">Showing %s matching log entries.</p>\n' "$result_count"
+  cat <<'HTML'
 <div class="card"><div class="table-responsive"><table class="table table-sm table-hover align-middle"><thead><tr><th>Time</th><th>Type</th><th>Host / route</th><th>Port</th><th>Method</th><th>HTTP</th><th>Client</th><th>URI / WAF finding</th><th>Decision</th></tr></thead><tbody>
 HTML
   while IFS= read -r event; do
@@ -1171,6 +1216,10 @@ HTML
 logs_export() {
   local format="${PARAM[format]:-jsonl}" query_output
   [[ "$format" == jsonl || "$format" == csv ]] || error_page 'Unsupported export format.'
+  # Exports cannot bypass the explicit-search requirement.
+  if [[ "${PARAM[apply]:-}" != 1 ]] || ! log_has_filter; then
+    error_page 'Choose and apply at least one log filter before exporting.'
+  fi
   if ! query_output="$(log_query 2>&1)"; then error_page "$query_output"; fi
   if [[ "$format" == jsonl ]]; then
     printf 'Content-Type: application/x-ndjson\r\nContent-Disposition: attachment; filename="liteedge-logs.jsonl"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
