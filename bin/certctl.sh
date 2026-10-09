@@ -28,8 +28,10 @@ validate_acme_email() {
     die "Enter a valid contact email for this site's Let's Encrypt certificate."
 }
 effective_acme_email() {
-  local saved=""
+  local saved="" registered
+  registered="$ACME_DIR/sites/$(slug_for_host "$host")/registered-email"
   [[ -s "$cdir/acme-email" ]] && saved="$(head -n1 "$cdir/acme-email")"
+  [[ -n "$saved" || ! -s "$registered" ]] || saved="$(head -n1 "$registered")"
   printf '%s' "${saved:-${ACME_EMAIL:-}}"
 }
 save_acme_email() {
@@ -130,7 +132,7 @@ CFG
       chmod 0600 "$account_base/registered-email"
     fi
 
-    args=(--cron --config "$ACME_DIR/config" --alias "$(slug_for_host "$host")" --domain "$host")
+    args=(--cron --config "$config" --alias "$(slug_for_host "$host")" --domain "$host")
     for alias in $aliases; do
       args+=(--domain "$alias")
     done
