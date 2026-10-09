@@ -8,3 +8,17 @@
 .liteedge-pre-scroll{max-height:24rem}
 .liteedge-crs-search{max-width:28rem}
 .liteedge-crs-rules{max-height:70vh;overflow:auto}
+
+/* In-form multi-select dropdowns that remain accessible without a CSS library. */
+.alert-option-menu {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  width: 100%;
+  z-index: 1050;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.alert-option-menu[hidden], .alert-option-menu [hidden] { display: none !important; }
+.alert-option-menu .dropdown-item { cursor: pointer; padding: .4rem .5rem; white-space: normal; }
+.alert-option-menu .dropdown-item:hover { background: var(--bs-tertiary-bg); }

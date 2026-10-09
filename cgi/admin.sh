@@ -1140,8 +1140,9 @@ logs_export() {
 }
 
 alerts_page() {
-  local alerts rule
+  local alerts rule catalog item name kind site route_value
   alerts="$(/opt/liteedge/bin/obsctl.sh alerts)"
+  catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
   page_head "Alerts"
   cat <<'HTML'
 <h1 class="h3">Alerts</h1><p class="text-secondary">A rule matches events in a rolling time window, triggers at a threshold, and delivers an email or HTTPS webhook. WAF blocking remains managed by OWASP CRS and route policy.</p>
@@ -1150,18 +1151,44 @@ HTML
   while IFS= read -r rule; do
     [[ -n "$rule" ]] || continue
     cat <<HTML
-<tr><td>$(html_escape "$(jq -r '.name' <<< "$rule")")</td><td>$(html_escape "$(jq -r '[.type,.host,.route,.method,.status,.action,.search] | map(select(.!="")) | join(" / ")' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.threshold) event(s) / \(.window)s; cooldown \(.cooldown)s"' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.channel) → \(.target)"' <<< "$rule")")</td><td><form method="post" action="/admin/alerts/delete"><input type="hidden" name="id" value="$(html_escape "$(jq -r '.id' <<< "$rule")")"><button class="btn btn-sm btn-outline-danger">Delete</button></form></td></tr>
+<tr><td>$(html_escape "$(jq -r '.name' <<< "$rule")")</td><td>$(html_escape "$(jq -r '[(.type // "all"), (if (.scopes|type)=="array" then ([.scopes[] | .host + (if (.routes|length)>0 then " ["+(.routes|join(", "))+"]" else "" end)] | join(", ")) else (.host // "")+" "+(.route // "") end),.method,.status,.action,.search] | map(select(.!="")) | join(" / ")' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.threshold) event(s) / \(.window)s; cooldown \(.cooldown)s"' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.channel) → \(.target)"' <<< "$rule")")</td><td><div class="d-flex gap-1"><button class="btn btn-sm btn-outline-primary" type="button" data-alert-edit="$(html_escape "$rule")">Edit</button><form method="post" action="/admin/alerts/delete"><input type="hidden" name="id" value="$(html_escape "$(jq -r '.id' <<< "$rule")")"><button class="btn btn-sm btn-outline-danger">Delete</button></form></div></td></tr>
 HTML
   done < <(jq -c '.[]' <<< "$alerts")
   cat <<'HTML'
 </tbody></table></div></div>
-<div class="card"><div class="card-header"><strong>Create or update alert</strong></div><div class="card-body"><form method="post" action="/admin/alerts/save"><div class="row g-3">
+<div class="card"><div class="card-header"><strong>Create or update alert</strong></div><div class="card-body"><form id="alertRuleForm" method="post" action="/admin/alerts/save"><input type="hidden" name="scopes_json" value="[]"><div class="row g-3">
 <div class="col-md-3"><label class="form-label">Rule ID</label><input class="form-control" name="id" pattern="[A-Za-z0-9_-]+" maxlength="48" required placeholder="high-error-rate"></div>
 <div class="col-md-5"><label class="form-label">Description</label><input class="form-control" name="name" required maxlength="100" placeholder="5xx spike"></div>
 <div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">Any</option><option value="http">HTTP</option><option value="waf">WAF match</option></select></div>
 <div class="col-md-2"><label class="form-label">WAF decision</label><select class="form-select" name="action"><option value="any">Any</option><option value="blocked">Blocked</option><option value="matched">Matched</option></select></div>
-<div class="col-md-3"><label class="form-label">Hostname</label><input class="form-control" name="host" placeholder="Optional"></div>
-<div class="col-md-3"><label class="form-label">Route</label><input class="form-control" name="route" placeholder="Optional"></div>
+<div class="col-md-6"><label class="form-label" for="alertHostButton">Hosts and aliases</label>
+<div class="position-relative" data-alert-picker="hosts">
+<button class="form-select text-start" type="button" id="alertHostButton" data-alert-toggle="hosts" aria-expanded="false" aria-controls="alertHostOptions">All hosts (select to restrict)</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="alertHostOptions" hidden><div class="text-secondary small px-2 pb-2">Choose one or more configured hosts or aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    name="$(jq -r '.name' <<< "$item")"; site="$(jq -r '.site' <<< "$item")"; kind="$(jq -r '.kind' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded"><input type="checkbox" class="form-check-input mt-0" data-alert-host data-site="$(html_escape "$site")" value="$(html_escape "$name")"><span>$(html_escape "$name")</span><span class="small text-secondary ms-auto">$(html_escape "$kind")</span></label>
+HTML
+  done < <(jq -c '.hosts[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Leave unselected for all hosts. Alias selections apply to their own hostname.</div></div>
+<div class="col-md-6"><label class="form-label" for="alertRouteButton">Routes</label>
+<div class="position-relative" data-alert-picker="routes">
+<button class="form-select text-start" type="button" id="alertRouteButton" data-alert-toggle="routes" aria-expanded="false" aria-controls="alertRouteOptions" disabled>Select hosts first</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="alertRouteOptions" hidden><div class="text-secondary small px-2 pb-2">Routes for selected hosts and aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    site="$(jq -r '.site' <<< "$item")"; route_value="$(jq -r '.route' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded" data-alert-route-item data-site="$(html_escape "$site")" hidden><input type="checkbox" class="form-check-input mt-0" data-alert-route data-site="$(html_escape "$site")" value="$(html_escape "$route_value")"><span class="text-truncate">$(html_escape "$route_value")</span><span class="small text-secondary ms-auto">$(html_escape "$site")</span></label>
+HTML
+  done < <(jq -c '.routes[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Automatically limited to selected hosts. No route selection means all routes for those hosts.</div></div>
 <div class="col-md-3"><label class="form-label">HTTP method</label><select class="form-select" name="method"><option value="">Any</option><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option></select></div>
 <div class="col-md-3"><label class="form-label">HTTP status / class</label><input class="form-control" name="status" placeholder="e.g. 5xx or 403"></div>
 <div class="col-md-5"><label class="form-label">Contains text</label><input class="form-control" name="search" placeholder="Optional message / URI / rule ID"></div>
@@ -1340,7 +1367,7 @@ handle_post() {
       redirect "/admin/owasp"
       ;;
     /admin/alerts/save)
-      run_or_error /opt/liteedge/bin/obsctl.sh alert-save "${PARAM[id]:-}" "${PARAM[name]:-}" "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[action]:-any}" "${PARAM[threshold]:-5}" "${PARAM[window]:-60}" "${PARAM[cooldown]:-300}" "${PARAM[channel]:-webhook}" "${PARAM[target]:-}" "${PARAM[search]:-}"
+      run_or_error /opt/liteedge/bin/obsctl.sh alert-save "${PARAM[id]:-}" "${PARAM[name]:-}" "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[action]:-any}" "${PARAM[threshold]:-5}" "${PARAM[window]:-60}" "${PARAM[cooldown]:-300}" "${PARAM[channel]:-webhook}" "${PARAM[target]:-}" "${PARAM[search]:-}" "${PARAM[scopes_json]:-[]}"
       redirect "/admin/alerts"
       ;;
     /admin/alerts/delete)
