@@ -232,6 +232,17 @@ case "$cmd" in
       die "Invalid route id."
     fi
 
+    # Preserve the identity of imported NGINX location fragments across edits.
+    import_key=""; import_original_target=""; import_original_timeout=""; import_scheme=""
+    if [[ -n "$old_id" && -f "$(route_dir "$host")/$old_id.route" ]]; then
+      old_route="$(route_dir "$host")/$old_id.route"
+      [[ "$(kv_get "$old_route" ACTION)" != custom ]] || die 'Custom imported locations are editable in Advanced NGINX, not as proxy routes.'
+      import_key="$(kv_get "$old_route" IMPORT_KEY)"
+      import_original_target="$(kv_get "$old_route" IMPORT_ORIGINAL_TARGET)"
+      import_original_timeout="$(kv_get "$old_route" IMPORT_ORIGINAL_TIMEOUT)"
+      import_scheme="$(kv_get "$old_route" IMPORT_SCHEME)"
+    fi
+
     snapshot_state
     dir="$(route_dir "$host")"
     mkdir -p "$dir"
@@ -248,6 +259,9 @@ case "$cmd" in
       printf 'WAF_PL=%s\n' "$waf_pl"
       printf 'WAF_PLUGINS=%s\n' "$waf_plugins"
       printf 'WAF_DISABLED=%s\n' "$waf_disabled"
+      if [[ -n "$import_key" ]]; then
+        printf 'ACTION=proxy\nIMPORT_KEY=%s\nIMPORT_ORIGINAL_TARGET=%s\nIMPORT_ORIGINAL_TIMEOUT=%s\nIMPORT_SCHEME=%s\n' "$import_key" "$import_original_target" "$import_original_timeout" "$import_scheme"
+      fi
     } > "$dir/$id.route"
     if [[ -n "$old_id" && "$old_id" != "$id" ]]; then
       rm -f "$dir/$old_id.route"
