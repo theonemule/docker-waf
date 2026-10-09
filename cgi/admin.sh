@@ -594,7 +594,11 @@ HTML
 }
 
 certificate_panel() {
-  local host="$1" mode summary
+  local host="$1" mode summary email_file email
+  email_file="$(cert_dir "$host")/acme-email"
+  email=""
+  [[ -s "$email_file" ]] && email="$(head -n1 "$email_file")"
+  [[ -n "$email" ]] || email="${ACME_EMAIL:-}"
   mode="$(cert_mode "$host")"
   summary="$(cert_summary "$host")"
   cat <<HTML
@@ -625,8 +629,13 @@ HTML
         <form method="post" action="/admin/cert/letsencrypt" class="border rounded p-3 h-100">
           <input type="hidden" name="host" value="$(html_escape "$host")">
           <h2 class="h6">Let's Encrypt</h2>
-          <p class="small text-secondary">Use shell-only ACME HTTP-01 issuance. DNS must resolve here and port 80 must be reachable.</p>
-          <button class="btn btn-outline-success" type="submit">Issue / renew Let's Encrypt</button>
+          <p class="small text-secondary">Per-site ACME account. The contact email can differ for every certificate. DNS must resolve here and port 80 must be reachable.</p>
+          <label class="form-label" for="acme_email">Certificate contact email</label>
+          <input class="form-control mb-3" type="email" id="acme_email" name="email" value="$(html_escape "$email")" placeholder="admin@example.com" autocomplete="email" required>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-secondary" type="submit" formaction="/admin/cert/email/save">Save email</button>
+            <button class="btn btn-outline-success" type="submit">Issue / renew Let's Encrypt</button>
+          </div>
         </form>
       </div>
     </div>
@@ -1307,9 +1316,15 @@ handle_post() {
       redirect "/admin/site?host=$host"
       ;;
 
+    /admin/cert/email/save)
+      host="${PARAM[host]:-}"
+      run_or_error /opt/liteedge/bin/certctl.sh set-email "$host" "${PARAM[email]:-}"
+      redirect "/admin/site?host=$host"
+      ;;
+
     /admin/cert/letsencrypt)
       host="${PARAM[host]:-}"
-      run_or_error /opt/liteedge/bin/certctl.sh letsencrypt "$host"
+      run_or_error /opt/liteedge/bin/certctl.sh letsencrypt "$host" "${PARAM[email]:-}"
       redirect "/admin/site?host=$host"
       ;;
 
@@ -1479,7 +1494,7 @@ case "$path" in
   /admin/logs/export) logs_export ;;
   /admin/alerts) alerts_page ;;
   /admin/collector) collector_page ;;
-  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
+  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
     handle_post "$path" ;;
   *)
     page_head "Not found"

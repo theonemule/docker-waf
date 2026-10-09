@@ -362,3 +362,25 @@ silently enrolled for automatic renewal**. Configure and validate automated
 renewal separately before certificate expiration. Run
 `bash tests/test-native-nginx-migration.sh` to check importer idempotence,
 custom locations, managed proxy edits, WAF, timeouts and route creation.
+
+
+### Per-site ACME email and migrated HTTP-01 support
+
+Each site's TLS panel stores its own validated Let's Encrypt contact email in
+the persistent certificate directory and provides **Save email** independently
+of **Issue / renew**. A global ACME_EMAIL environment value is an optional
+fallback for sites without an override. ACME accounts and registration metadata
+are isolated by hostname under /data/acme/sites, allowing different accounts
+and contact addresses. Renewal reuses the saved contact for each issued site.
+
+Migrated NGINX sites originally containing unconditional HTTP redirects must
+serve /.well-known/acme-challenge/ without redirecting. For those imported
+sites, use scripts/enable-imported-acme-http01.py on a copied data directory
+before production migration. The script preserves ordinary redirect behavior,
+recognizes existing HTTP challenge routes, and is idempotent.
+
+Global NGINX migration maps are now included in every regenerated runtime
+configuration, not solely by a one-time startup patch. Remove the legacy
+one-time map injection from a migrated custom entrypoint before deploying this
+change. This prevents OWASP CRS updates from losing $allow_access and other
+custom variables.

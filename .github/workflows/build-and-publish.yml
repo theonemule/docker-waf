@@ -43,6 +43,7 @@ jobs:
           bash tests/test-alert-selectors.sh
           bash tests/test-log-selectors.sh
           bash tests/test-native-nginx-migration.sh
+          bash tests/test-acme-crs-integration.sh
           node tests/test-ui-import.js
 
   build-appliance:

@@ -21,7 +21,31 @@ install_and_reload() {
   reload_nginx
 }
 
+# Persist contact email per certificate/site, not as a single global value.
+validate_acme_email() {
+  local email="$1"
+  [[ ${#email} -le 254 && "$email" =~ ^[A-Za-z0-9_%+.-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]] ||
+    die "Enter a valid contact email for this site's Let's Encrypt certificate."
+}
+effective_acme_email() {
+  local saved=""
+  [[ -s "$cdir/acme-email" ]] && saved="$(head -n1 "$cdir/acme-email")"
+  printf '%s' "${saved:-${ACME_EMAIL:-}}"
+}
+save_acme_email() {
+  local chosen="$1" temp
+  validate_acme_email "$chosen"
+  temp="$(mktemp "$cdir/.acme-email.XXXXXX")"
+  chmod 0600 "$temp"
+  printf '%s\n' "$chosen" > "$temp"
+  mv -f "$temp" "$cdir/acme-email"
+}
+
 case "$cmd" in
+  set-email)
+    save_acme_email "${3:-}"
+    ;;
+
   selfsigned)
     san="DNS:$host"
     for alias in $aliases; do
@@ -70,20 +94,40 @@ case "$cmd" in
     ;;
 
   letsencrypt)
-    [[ -n "${ACME_EMAIL:-}" ]] || die "ACME_EMAIL must be set in .env before issuing Let's Encrypt certificates."
+    email="${3:-}"
+    [[ -n "$email" ]] || email="$(effective_acme_email)"
+    [[ -n "$email" ]] || die "Set a Let's Encrypt contact email in this site's TLS certificate settings."
+    validate_acme_email "$email"
 
-    cat > "$ACME_DIR/config" <<CFG
+    slug="$(slug_for_host "$host")"
+    # Independent account keys and registration for each site.
+    account_base="$ACME_DIR/sites/$slug"
+    config="$account_base/config"
+    mkdir -p "$account_base" "$ACME_DIR/certs" "$ACME_DIR/challenges/.well-known/acme-challenge"
+    chmod 0700 "$account_base"
+    cat > "$config" <<CFG
 CA="letsencrypt"
-BASEDIR="$ACME_DIR"
-WELLKNOWN="$ACME_DIR/challenges/.well-known/acme-challenge"
+BASEDIR="$account_base"
+ACCOUNTDIR="$account_base/accounts"
 CERTDIR="$ACME_DIR/certs"
-CONTACT_EMAIL="$ACME_EMAIL"
+WELLKNOWN="$ACME_DIR/challenges/.well-known/acme-challenge"
+CONTACT_EMAIL="$email"
 CHALLENGETYPE="http-01"
 CFG
-    chmod 600 "$ACME_DIR/config"
+    chmod 0600 "$config"
 
-    if [[ ! -d "$ACME_DIR/accounts" ]]; then
-      dehydrated --register --accept-terms --config "$ACME_DIR/config"
+    # If contact changes, preserve old account rather than claiming that
+    # a new email has automatically changed an existing ACME registration.
+    if [[ -f "$account_base/registered-email" && "$(cat "$account_base/registered-email")" != "$email" ]]; then
+      if [[ -d "$account_base/accounts" ]]; then
+        mv "$account_base/accounts" "$account_base/accounts-$(date +%s).previous"
+      fi
+      rm -f "$account_base/registered-email"
+    fi
+    if [[ ! -f "$account_base/registered-email" ]]; then
+      dehydrated --register --accept-terms --config "$config"
+      printf '%s\n' "$email" > "$account_base/registered-email"
+      chmod 0600 "$account_base/registered-email"
     fi
 
     args=(--cron --config "$ACME_DIR/config" --alias "$(slug_for_host "$host")" --domain "$host")
@@ -100,6 +144,7 @@ CFG
     install -m 600 "$acme_key" "$cdir/privkey.pem"
     printf '%s\n' letsencrypt > "$cdir/mode"
     printf '%s %s\n' "$host" "$aliases" > "$cdir/domains"
+    save_acme_email "$email"
     install_and_reload
     ;;
 
