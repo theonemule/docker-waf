@@ -32,6 +32,9 @@ NGINX
 python3 "$ROOT/scripts/import-native-nginx.py" --data "$TMP/data" > "$TMP/inventory.json"
 [[ "$(jq -r '.route_count' "$TMP/inventory.json")" == 3 ]]
 [[ "$(find "$TMP/data/sites/demo.test.routes" -name '*.route' -type f | wc -l)" == 3 ]]
+# Repeated imports of unchanged native config are safe and preserve content.
+python3 "$ROOT/scripts/import-native-nginx.py" --data "$TMP/data" >/dev/null
+[[ "$(stat -c '%a' "$TMP/data/imported/sites/demo.test/template.conf")" == 600 ]]
 cat > "$TMP/mock-common.sh" <<'COMMON'
 DATA_DIR="${DATA_DIR:?}"
 SITE_DIR="$DATA_DIR/sites"
