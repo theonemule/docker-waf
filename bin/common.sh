@@ -26,6 +26,7 @@ WAF_CRS_META_FILE="${WAF_CRS_META_FILE:-$WAF_DIR/crs-release.conf}"
 WAF_CRS_UPDATE_FILE="${WAF_CRS_UPDATE_FILE:-$WAF_DIR/crs-update.conf}"
 BUNDLED_CRS_DIR="${BUNDLED_CRS_DIR:-/opt/liteedge/etc/crs}"
 SERVER_SETTINGS_FILE="${SERVER_SETTINGS_FILE:-$DATA_DIR/server-settings.conf}"
+OBS_DIR="${OBS_DIR:-$DATA_DIR/observability}"
 
 mkdir -p   "$SITE_DIR" "$CERT_DIR"   "$ACME_DIR/challenges/.well-known/acme-challenge" "$ACME_DIR/certs"   "$NGINX_SITE_DIR" "$NGINX_BASELINE_DIR" "$NGINX_DIFF_DIR" "$NGINX_CONFLICT_DIR"   "$WAF_DIR" "$WAF_CUSTOM_DIR" "$WAF_PLUGIN_DIR"
 

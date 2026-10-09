@@ -99,11 +99,14 @@ prepares the persistent data directory for the unprivileged container user, pull
 
 Open:
 
-    https://SERVER_IP/
+    https://127.0.0.1:8443/
 
-Requests to the management listener over HTTP are redirected to HTTPS before Basic
-Auth credentials are requested. The initial HTTPS management certificate is
-self-signed. Use the Basic Auth credentials printed by install.sh.
+The web proxy uses public ports 80/443; administration is **not available on
+those ports**. Admin HTTPS binds only to loopback by default. For private LAN
+access, set `LITEEDGE_ADMIN_BIND_IP=10.0.1.2` (use the actual appliance LAN IP)
+in `.env` and restart the Compose service. Never forward the admin port from
+an internet router. The initial admin certificate is self-signed and Basic Auth
+credentials are provided by the installer.
 
 To enable Let's Encrypt, edit .env and set:
 
@@ -121,8 +124,9 @@ port 80 must be reachable from the Internet.
 The Compose deployment runs LiteEdge as UID/GID 10001, uses a read-only root
 filesystem, drops all Linux capabilities, enables no-new-privileges, sets a PID
 limit, and provides only /data plus a small /tmp tmpfs as writable storage.
-NGINX listens on unprivileged container ports 8080 and 8443, which are mapped to
-host ports 80 and 443. The CGI worker runs as the same unprivileged LiteEdge user.
+NGINX listens on container ports 8080 (website HTTP), 8443 (website HTTPS),
+and 9443 (admin HTTPS), mapped to public host ports 80/443 and private host
+8443 respectively. The CGI worker runs as the same unprivileged LiteEdge user.
 
 ## Standalone Alpine install
 
@@ -181,8 +185,9 @@ The UI calls the same scripts that can be used manually inside the container:
 
 ## Security model
 
-The management UI is protected by NGINX HTTP Basic Auth over HTTPS. HTTP requests to
-the management listener are redirected before authentication. The UI uses no
+The management UI is protected by Basic Auth on a separate HTTPS listener.
+Unknown public HTTP hostnames receive 404 and unknown public HTTPS SNI is rejected.
+The browser-side UI doesn't depend on inline styles or inline scripts. The UI uses no
 client-side application framework and loads its Bootstrap stylesheet locally.
 
 Generated NGINX configuration receives baseline security headers. Route WAF policies
@@ -257,3 +262,36 @@ Successful `main` builds publish the container to:
 
 Tags matching `v3.*` publish the matching immutable container tag and attach the
 standalone appliance bundle and installers to a GitHub Release.
+## Logs, alert rules and collection
+
+The **Logs** page combines structured NGINX access events and normalized ModSecurity
+rule matches. Events include timestamp, hostname, route match/pattern, external
+listener port, internal listener and upstream address (including backend port),
+HTTP method/status, path, client IP, request ID and WAF rule/message/disposition.
+Filter by hostname, route, method, HTTP status or status class (2xx–5xx), port,
+free-text, and Unix timestamp. Download up to 1,000 filtered events as JSONL or
+CSV; the view also searches up to seven compressed rotated log archives.
+Only the URI path is collected from NGINX; query strings, request/response bodies,
+credentials and cookies are not copied into centralized JSON event logs.
+
+The **Alerts** page defines conditions over HTTP/WAF events with event-count
+thresholds, rolling windows and cooldown periods. Each rule delivers to an HTTPS
+webhook or SMTP email. WAF prevention is done by the OWASP CRS intervention engine,
+not by ad-hoc alert scripts. Rule matches and blocked decisions appear in the Logs
+screen. The exporter/notification worker runs independently of NGINX so a failed
+collector doesn't interrupt the reverse proxy.
+
+The **Log Export** page configures one external sink, either RFC 5424 syslog
+(UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
+Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP with STARTTLS
+for email notifications. Tokens and SMTP passwords are stored in mode 0600 files
+under `/data/observability` and never displayed in the form after saving.
+Events live under `/data/logs/events.jsonl`; ModSecurity source audit logs are
+stored in `/data/logs/modsec_audit.json` and normalized into central events.
+A rotation policy limits each active log to 25 MiB with seven compressed copies,
+using copytruncate for uninterrupted writes. Worker failures appear in
+`/data/logs/observability-worker.log`; the worker retries export/notifications,
+with delivery cursors and alert cooldown state persisted under `/data/observability`.
+
+Run `bash tests/test-observability.sh` to exercise filtering, synthetic WAF
+normalization, alert delivery/cooldown, redaction and collector validation.

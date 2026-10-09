@@ -5,6 +5,8 @@ source /opt/liteedge/bin/common.sh
 
 HTTP_PORT="${LITEEDGE_HTTP_PORT:-80}"
 HTTPS_PORT="${LITEEDGE_HTTPS_PORT:-443}"
+ADMIN_HTTPS_PORT="${LITEEDGE_ADMIN_HTTPS_PORT:-9443}"
+PUBLIC_HTTP_PORT="${LITEEDGE_PUBLIC_HTTP_PORT:-80}"
 BIND_ADDRESS="${LITEEDGE_BIND_ADDRESS:-0.0.0.0}"
 PUBLIC_HTTPS_PORT="${LITEEDGE_PUBLIC_HTTPS_PORT:-443}"
 HTTPS_REDIRECT_SUFFIX=""
@@ -33,6 +35,9 @@ PARANOIA_LEVEL="$(waf_setting_get PARANOIA_LEVEL 1)"
 
 [[ "$HTTP_PORT" =~ ^[0-9]+$ && "$HTTP_PORT" -ge 1 && "$HTTP_PORT" -le 65535 ]] || die "Invalid HTTP port."
 [[ "$HTTPS_PORT" =~ ^[0-9]+$ && "$HTTPS_PORT" -ge 1 && "$HTTPS_PORT" -le 65535 ]] || die "Invalid HTTPS port."
+[[ "$ADMIN_HTTPS_PORT" =~ ^[0-9]+$ && "$ADMIN_HTTPS_PORT" -ge 1 && "$ADMIN_HTTPS_PORT" -le 65535 ]] || die "Invalid admin port."
+[[ "$PUBLIC_HTTP_PORT" =~ ^[0-9]+$ && "$PUBLIC_HTTP_PORT" -ge 1 && "$PUBLIC_HTTP_PORT" -le 65535 ]] || die "Invalid public HTTP port."
+[[ "$HTTP_PORT" != "$HTTPS_PORT" && "$ADMIN_HTTPS_PORT" != "$HTTP_PORT" && "$ADMIN_HTTPS_PORT" != "$HTTPS_PORT" ]] || die "Listener ports must be distinct."
 [[ "$PUBLIC_HTTPS_PORT" =~ ^[0-9]+$ && "$PUBLIC_HTTPS_PORT" -ge 1 && "$PUBLIC_HTTPS_PORT" -le 65535 ]] || die "Invalid public HTTPS port."
 valid_bind_address "$BIND_ADDRESS" || die "Invalid bind address."
 [[ "$RUN_DIR" == /* && "$RUN_DIR" != *$'\n'* ]] || die "Invalid runtime directory."
@@ -74,6 +79,11 @@ redirect_suffix_esc="$(escape_sed "$HTTPS_REDIRECT_SUFFIX")"
 sed \
   -e "s|@DATA_DIR@|$data_esc|g" \
   -e "s|@RUN_DIR@|$run_esc|g" \
+  -e "s|@HTTP_PORT@|$HTTP_PORT|g" \
+  -e "s|@HTTPS_PORT@|$HTTPS_PORT|g" \
+  -e "s|@ADMIN_HTTPS_PORT@|$ADMIN_HTTPS_PORT|g" \
+  -e "s|@PUBLIC_HTTP_PORT@|$PUBLIC_HTTP_PORT|g" \
+  -e "s|@PUBLIC_HTTPS_PORT@|$PUBLIC_HTTPS_PORT|g" \
   -e "s|@RESOLVER@|$resolver_esc|g" \
   -e "s|@WORKER_CONNECTIONS@|$WORKER_CONNECTIONS|g" \
   -e "s|@KEEPALIVE_TIMEOUT@|$KEEPALIVE_TIMEOUT|g" \
@@ -92,6 +102,7 @@ sed \
   -e "s|@RUN_DIR@|$run_esc|g" \
   -e "s|@HTTP_PORT@|$HTTP_PORT|g" \
   -e "s|@HTTPS_PORT@|$HTTPS_PORT|g" \
+  -e "s|@ADMIN_HTTPS_PORT@|$ADMIN_HTTPS_PORT|g" \
   -e "s|@BIND_ADDRESS@|$bind_esc|g" \
   -e "s|@HTTPS_REDIRECT_SUFFIX@|$redirect_suffix_esc|g" \
   "$admin_template" | replace_file "$NGINX_DIR/admin.conf"
@@ -101,6 +112,15 @@ sed \
   -e "s|@DATA_DIR@|$data_esc|g" \
   -e "s|@RUN_DIR@|$run_esc|g" \
   /opt/liteedge/etc/modsecurity/modsecurity.conf.template | replace_file "$NGINX_DIR/modsecurity.conf"
+# Keep ModSecurity JSON auditing active with prebuilt or freshly compiled runtimes.
+# Raw audit data stays private; normalized UI events never include request bodies.
+sed -i -e "s|^SecAuditLog .*|SecAuditLog $DATA_DIR/logs/modsec_audit.json|" "$NGINX_DIR/modsecurity.conf"
+cat <<'CONF' >> "$NGINX_DIR/modsecurity.conf"
+SecAuditLogFormat JSON
+SecAuditLogType Serial
+SecAuditLogParts AFHZ
+SecAuditEngine RelevantOnly
+CONF
 
 # Override the CRS paranoia level after crs-setup.conf and before CRS rules load.
 cat <<EOF | replace_file "$NGINX_DIR/modsecurity-pre.conf"

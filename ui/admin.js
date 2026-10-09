@@ -89,3 +89,17 @@
     }
   });
 })();
+// Preserve filter and collector selections across full-page form submissions.
+(() => {
+  if (typeof location === "undefined" || typeof URLSearchParams === "undefined" ||
+      typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+  const params = new URLSearchParams(location.search);
+  document.querySelectorAll('form[action="/admin/logs"] select[name]').forEach((select) => {
+    const value = params.get(select.name);
+    if (value !== null && Array.from(select.options).some((option) => option.value === value)) select.value = value;
+  });
+  document.querySelectorAll('select[data-selected]').forEach((select) => {
+    const value = select.getAttribute('data-selected');
+    if (Array.from(select.options).some((option) => option.value === value)) select.value = value;
+  });
+})();

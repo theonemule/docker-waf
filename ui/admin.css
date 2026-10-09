@@ -1,0 +1,10 @@
+    dialog.liteedge-dialog { width:min(760px,calc(100vw - 2rem)); border:0; border-radius:.75rem; padding:0; box-shadow:0 1rem 3rem rgba(0,0,0,.25); }
+    dialog.liteedge-dialog.liteedge-dialog-lg { width:min(1400px,calc(100vw - 2rem)); }
+    dialog.liteedge-dialog::backdrop { background:rgba(0,0,0,.45); }
+    .sidebar-nav { min-height:calc(100vh - 56px); }
+    .sidebar-nav .nav-link { color:var(--bs-body-color); border-radius:.375rem; }
+    .sidebar-nav .nav-link.active { background:var(--bs-primary); color:#fff; }
+
+.liteedge-pre-scroll{max-height:24rem}
+.liteedge-crs-search{max-width:28rem}
+.liteedge-crs-rules{max-height:70vh;overflow:auto}

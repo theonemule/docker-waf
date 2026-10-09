@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install validation tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck jq
 
       - name: Validate source
         shell: bash
@@ -39,6 +39,7 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/test-deployment.sh
+          bash tests/test-observability.sh
           node tests/test-ui-import.js
 
   build-appliance:

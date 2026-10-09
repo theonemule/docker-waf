@@ -46,7 +46,7 @@ apk add --no-cache \
   bash ca-certificates curl openssl tzdata \
   fcgiwrap spawn-fcgi \
   pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb \
-  coreutils diffutils patch lua5.3-libs jq libcap openrc
+  coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc
 
 if [ "$VERSION" = "latest" ]; then
   VERSION="$(
@@ -125,6 +125,7 @@ export ADMIN_PASSWORD='$GENERATED_PASSWORD'
 export ACME_EMAIL=''
 export LITEEDGE_HTTP_PORT=80
 export LITEEDGE_HTTPS_PORT=443
+export LITEEDGE_ADMIN_HTTPS_PORT=8443
 export LITEEDGE_BIND_ADDRESS=0.0.0.0
 export LITEEDGE_PUBLIC_HTTPS_PORT=443
 CONF

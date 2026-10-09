@@ -54,6 +54,8 @@ fi
 
 /opt/liteedge/bin/render-runtime.sh
 /opt/liteedge/bin/render-nginx.sh
+# Continuous normalization/export and alert delivery; never blocks the proxy process.
+/opt/liteedge/bin/obs-worker.sh run >>"$DATA_DIR/logs/observability-worker.log" 2>&1 &
 
 rm -f "$RUN_DIR/fcgiwrap.sock"
 spawn-fcgi -s "$RUN_DIR/fcgiwrap.sock" -M 600 -- /usr/bin/fcgiwrap
