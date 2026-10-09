@@ -194,3 +194,86 @@
   form.addEventListener("submit", updatePickers);
   updatePickers();
 })();
+
+// Logs use the same inventory-backed, multi-host/route selectors as Alerts.
+(() => {
+  if (typeof document === "undefined" || typeof document.getElementById !== "function") return;
+  const form = document.getElementById("logFilterForm");
+  if (!form) return;
+  const hostChecks = Array.from(form.querySelectorAll("[data-log-host]"));
+  const routeChecks = Array.from(form.querySelectorAll("[data-log-route]"));
+  const hostButton = document.getElementById("logHostButton");
+  const routeButton = document.getElementById("logRouteButton");
+  const hostOptions = document.getElementById("logHostOptions");
+  const routeOptions = document.getElementById("logRouteOptions");
+  const scopesField = form.querySelector('input[name="scopes_json"]');
+  if (!hostButton || !routeButton || !hostOptions || !routeOptions || !scopesField) return;
+  const checked = (items) => items.filter((item) => item.checked);
+  const shorten = (values, fallback) => values.length === 0 ? fallback :
+    (values.length <= 2 ? values.join(", ") : `${values.length} selected`);
+  const hideMenu = (button, menu) => {
+    menu.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  function updatePickers() {
+    const selectedHosts = checked(hostChecks);
+    const selectedSites = new Set(selectedHosts.map((item) => item.dataset.site));
+    routeChecks.forEach((item) => {
+      const available = selectedSites.has(item.dataset.site);
+      item.closest("[data-log-route-item]").hidden = !available;
+      if (!available) item.checked = false;
+    });
+    hostButton.textContent = shorten(selectedHosts.map((item) => item.value), "All hosts (select to filter)");
+    routeButton.disabled = selectedHosts.length === 0 || !routeChecks.some((item) => !item.closest("[data-log-route-item]").hidden);
+    const selectedRoutes = checked(routeChecks);
+    routeButton.textContent = routeButton.disabled ?
+      (selectedHosts.length ? "No routes configured for these hosts" : "Select hosts first") :
+      shorten(selectedRoutes.map((item) => `${item.dataset.site} · ${item.value}`), "All routes (select to filter)");
+    if (routeButton.disabled) hideMenu(routeButton, routeOptions);
+    scopesField.value = JSON.stringify(selectedHosts.map((item) => ({
+      host: item.value,
+      site: item.dataset.site,
+      routes: selectedRoutes.filter((route) => route.dataset.site === item.dataset.site).map((route) => route.value)
+    })));
+  }
+  hostChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  routeChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  document.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-log-toggle]");
+    if (toggle && !toggle.disabled) {
+      const menu = toggle.dataset.logToggle === "hosts" ? hostOptions : routeOptions;
+      const otherButton = toggle.dataset.logToggle === "hosts" ? routeButton : hostButton;
+      const otherMenu = toggle.dataset.logToggle === "hosts" ? routeOptions : hostOptions;
+      hideMenu(otherButton, otherMenu);
+      menu.hidden = !menu.hidden;
+      toggle.setAttribute("aria-expanded", String(!menu.hidden));
+      return;
+    }
+    if (!event.target.closest("[data-log-picker]")) {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+  });
+  // Preserve both host and route selections on navigation/reload/export.
+  let savedScopes = [];
+  try {
+    const parsed = JSON.parse(form.dataset.logInitialScopes || scopesField.value || "[]");
+    if (Array.isArray(parsed)) savedScopes = parsed;
+  } catch (_) { savedScopes = []; }
+  hostChecks.forEach((item) => {
+    item.checked = savedScopes.some((scope) => scope.host === item.value && scope.site === item.dataset.site);
+  });
+  updatePickers();
+  routeChecks.forEach((item) => {
+    item.checked = !item.closest("[data-log-route-item]").hidden && savedScopes.some((scope) =>
+      scope.site === item.dataset.site && Array.isArray(scope.routes) && scope.routes.includes(item.value));
+  });
+  updatePickers();
+  form.addEventListener("submit", updatePickers);
+})();

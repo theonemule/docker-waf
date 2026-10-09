@@ -41,6 +41,7 @@ jobs:
           bash tests/test-deployment.sh
           bash tests/test-observability.sh
           bash tests/test-alert-selectors.sh
+          bash tests/test-log-selectors.sh
           node tests/test-ui-import.js
 
   build-appliance:

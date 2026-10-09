@@ -311,3 +311,20 @@ not been created. Paths are matched for prefix/exact patterns when the migrated
 NGINX configuration does not emit explicit route labels. Selections are validated
 against the server-side inventory on save, and older scalar host/route rules
 continue matching as before. Test via `bash tests/test-alert-selectors.sh`.
+
+### Inventory-backed log filters
+
+The **Logs** screen now uses the same multi-select host/alias and filtered route
+dropdowns as Alerts. Hostnames and aliases come from the configured site
+inventory. Route options are read from managed routes and migrated NGINX
+`location` blocks. Select multiple hostnames or aliases, then optionally
+restrict each selected host to one or more of its routes. Leaving host selection
+blank means all hosts; leaving routes blank for a selected hostname includes
+all its requests. Matching uses actual request hostnames and either NGINX route
+labels or request URI prefix/exact/regex matches for imported routes.
+
+Filters persist across submissions and are applied server-side to the Logs
+screen, CSV downloads and JSONL downloads. The backend validates requested
+host/route combinations against the current inventory. Older host/route query
+parameters still work for bookmarked URLs. Run `bash tests/test-log-selectors.sh`
+for multi-site, aliases, WAF events, status classes and tampered-filter cases.
