@@ -26,13 +26,33 @@ valid_https() { [[ "$1" =~ ^https://[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~
 
 # Each JSON document is checked by jq. No shell evaluation of user-defined filters.
 query() {
-  local kind="${1:-all}" host="${2:-}" route="${3:-}" port="${4:-}" method="${5:-}" status="${6:-}" search="${7:-}" limit="${8:-100}" since="${9:-0}"
+  local kind="${1:-all}" host="${2:-}" route="${3:-}" port="${4:-}" method="${5:-}" status="${6:-}" search="${7:-}" limit="${8:-100}" since="${9:-0}" scopes_json="${10:-}"
   [[ "$kind" == all || "$kind" == http || "$kind" == waf ]] || die 'Invalid event type.'
   if ! { [[ "$limit" =~ ^[0-9]{1,4}$ ]] && (( 10#$limit >= 1 && 10#$limit <= 1000 )); }; then die 'Limit must be 1-1000.'; fi
   [[ "$since" =~ ^[0-9]{1,15}$ ]] || die 'Since must be a Unix timestamp.'
   [[ -z "$status" || "$status" =~ ^[1-5][0-9]{2}$ || "$status" =~ ^[1-5]xx$ ]] || die 'Invalid status filter.'
   [[ -z "$port" || "$port" =~ ^[0-9]{1,5}$ ]] || die 'Invalid port filter.'
   [[ -z "$method" || "$method" =~ ^[A-Z]{1,12}$ ]] || die 'Invalid method filter.'
+  local scopes_arg=null
+  if [[ -n "$scopes_json" ]]; then
+    [[ ${#scopes_json} -le 16384 ]] || die 'Too many host/route selections.'
+    # Reject forged hostnames, aliases and routes, not just malformed JSON.
+    local catalog
+    catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+    if ! jq -en --arg raw "$scopes_json" --argjson catalog "$catalog" '
+      ($raw | fromjson?) as $scopes |
+      ($scopes | type)=="array" and ($scopes|length)<=100 and
+      all($scopes[];
+        type=="object" and ((.host // null)|type)=="string" and
+        ((.site // null)|type)=="string" and ((.routes // null)|type)=="array" and
+        (.routes|length)<=200 and all(.routes[];type=="string") and
+        (. as $s | any($catalog.hosts[]; .name==$s.host and .site==$s.site) and
+        all($s.routes[]; . as $r | any($catalog.routes[]; .site==$s.site and .route==$r))))
+    ' >/dev/null; then
+      die 'Selected hosts, aliases or routes are not valid for the configured sites.'
+    fi
+    scopes_arg="$scopes_json"
+  fi
   [[ -z "$EVENTS_FILE" || -f "$EVENTS_FILE" ]] || return 0
   local -a sources=()
   local i
@@ -43,11 +63,28 @@ query() {
   sources+=("$EVENTS_FILE")
   { for i in "${sources[@]}"; do
       if [[ "$i" == *.gz ]]; then gzip -cd "$i"; else cat "$i"; fi
-    done; } | jq -c --arg kind "$kind" --arg host "$host" --arg route "$route" --arg port "$port" --arg method "$method" --arg status "$status" --arg search "$search" --argjson since "$since" '
+    done; } | jq -c --arg kind "$kind" --arg host "$host" --arg route "$route" --arg port "$port" --arg method "$method" --arg status "$status" --arg search "$search" --argjson since "$since" --argjson scopes "$scopes_arg" '
+    def route_matches($pattern):
+      . as $event |
+      ($event.route // "") == $pattern or
+      (if $pattern | startswith("prefix:") then
+         (($event.uri // "") | startswith($pattern[7:]))
+       elif $pattern | startswith("exact:") then
+         (($event.uri // "") == $pattern[6:])
+       elif $pattern | startswith("regex:") then
+         try (($event.uri // "") | test($pattern[6:])) catch false
+       else false end);
     select(type=="object")
     | select($kind == "all" or .type == $kind)
-    | select($host == "" or (.host // "") == $host)
-    | select($route == "" or (.route // "") == $route)
+    | . as $event
+    | select(if $scopes == null then
+        ($host == "" or ($event.host // "") == $host) and ($route == "" or ($event.route // "") == $route)
+      else
+        ($scopes | length)==0 or
+        any($scopes[];
+          .host == ($event.host // "") and
+          ((.routes|length)==0 or any(.routes[]; . as $route_pattern | $event | route_matches($route_pattern))))
+      end)
     | select($port == "" or ((.port // "") | tostring) == $port or ((.listen_port // "") | tostring) == $port or ((.upstream_addr // "" | tostring | split(":") | last) == $port))
     | select($method == "" or (.method // "") == $method)
     | select($status == "" or (if ($status | endswith("xx")) then ((.status // 0) | tostring | startswith($status[0:1])) else ((.status // "") | tostring) == $status end))

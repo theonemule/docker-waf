@@ -1085,22 +1085,47 @@ handle_crs_raw_import() {
 
 # All log searches and exports are bounded and use a typed jq filter, never shell eval.
 log_query() {
-  /opt/liteedge/bin/obsctl.sh query "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[port]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[search]:-}" "${PARAM[limit]:-100}" "${PARAM[since]:-0}"
+  /opt/liteedge/bin/obsctl.sh query "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[port]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[search]:-}" "${PARAM[limit]:-100}" "${PARAM[since]:-0}" "${PARAM[scopes_json]:-}"
 }
 
 logs_page() {
-  local events event kind badge_color type host route port method status search limit since
-  type="$(html_escape "${PARAM[type]:-all}")"; host="$(html_escape "${PARAM[host]:-}")"; route="$(html_escape "${PARAM[route]:-}")"
+  local events event kind badge_color type port method status search limit since catalog item name site route_value
+  type="$(html_escape "${PARAM[type]:-all}")"
+  catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
   port="$(html_escape "${PARAM[port]:-}")"; method="$(html_escape "${PARAM[method]:-}")"; status="$(html_escape "${PARAM[status]:-}")"
   search="$(html_escape "${PARAM[search]:-}")"; limit="$(html_escape "${PARAM[limit]:-100}")"; since="$(html_escape "${PARAM[since]:-0}")"
   if ! events="$(log_query 2>&1)"; then error_page "$events"; fi
   page_head "Logs"
   cat <<HTML
 <div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">Request and WAF logs</h1><p class="text-secondary mb-0">Structured requests, rule matches, blocked attacks and HTTP errors.</p></div><div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="/admin/logs/export?format=jsonl&amp;$(html_escape "${QUERY_STRING:-}")">Export JSONL</a><a class="btn btn-outline-secondary" href="/admin/logs/export?format=csv&amp;$(html_escape "${QUERY_STRING:-}")">Export CSV</a></div></div>
-<form action="/admin/logs" method="get" class="card mb-3 shadow-sm"><div class="card-body"><div class="row g-2">
+<form action="/admin/logs" method="get" id="logFilterForm" class="card mb-3 shadow-sm" data-log-initial-scopes="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="scopes_json" value="$(html_escape "${PARAM[scopes_json]:-[]}")"><div class="card-body"><div class="row g-2">
 <div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">All</option><option value="http">HTTP</option><option value="waf">WAF rules</option></select></div>
-<div class="col-md-2"><label class="form-label">Hostname</label><input class="form-control" name="host" value="$host" placeholder="app.example.com"></div>
-<div class="col-md-2"><label class="form-label">Route</label><input class="form-control" name="route" value="$route" placeholder="prefix:/api/"></div>
+<div class="col-md-5"><label class="form-label" for="logHostButton">Hosts and aliases</label><div class="position-relative" data-log-picker="hosts">
+<button class="form-select text-start" type="button" id="logHostButton" data-log-toggle="hosts" aria-expanded="false" aria-controls="logHostOptions">All hosts (select to filter)</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="logHostOptions" hidden><div class="text-secondary small px-2 pb-2">Select multiple configured hosts or aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    name="$(jq -r '.name' <<< "$item")"; site="$(jq -r '.site' <<< "$item")"; kind="$(jq -r '.kind' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded"><input type="checkbox" class="form-check-input mt-0" data-log-host data-site="$(html_escape "$site")" value="$(html_escape "$name")"><span>$(html_escape "$name")</span><span class="small text-secondary ms-auto">$(html_escape "$kind")</span></label>
+HTML
+  done < <(jq -c '.hosts[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Nothing selected includes every host.</div></div>
+<div class="col-md-5"><label class="form-label" for="logRouteButton">Routes</label><div class="position-relative" data-log-picker="routes">
+<button class="form-select text-start" type="button" id="logRouteButton" data-log-toggle="routes" aria-expanded="false" aria-controls="logRouteOptions" disabled>Select hosts first</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="logRouteOptions" hidden><div class="text-secondary small px-2 pb-2">Routes for the selected hosts and aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    site="$(jq -r '.site' <<< "$item")"; route_value="$(jq -r '.route' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded" data-log-route-item data-site="$(html_escape "$site")" hidden><input type="checkbox" class="form-check-input mt-0" data-log-route data-site="$(html_escape "$site")" value="$(html_escape "$route_value")"><span class="text-truncate">$(html_escape "$route_value")</span><span class="small text-secondary ms-auto">$(html_escape "$site")</span></label>
+HTML
+  done < <(jq -c '.routes[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Routes are filtered by the selected hosts. No routes selected means all their routes.</div></div>
 <div class="col-md-2"><label class="form-label">Listener port</label><input class="form-control" type="number" min="1" max="65535" name="port" value="$port" placeholder="443"></div>
 <div class="col-md-2"><label class="form-label">HTTP method</label><select class="form-select" name="method"><option value="">All methods</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select></div>
 <div class="col-md-2"><label class="form-label">Status</label><select class="form-select" name="status"><option value="">All statuses</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option>200</option><option>201</option><option>301</option><option>400</option><option>401</option><option>403</option><option>404</option><option>429</option><option>500</option><option>502</option><option>503</option></select></div>
