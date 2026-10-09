@@ -85,10 +85,10 @@ install -m 0644 "$SRC/ModSecurity/modsecurity.conf-recommended" "$PREFIX/etc/mod
 install -m 0644 "$SRC/ModSecurity/unicode.mapping" "$PREFIX/etc/modsecurity/unicode.mapping"
 sed -i \
   -e 's/^SecRuleEngine .*/SecRuleEngine On/' \
-  -e 's#^SecAuditLog .*#SecAuditLog @DATA_DIR@/logs/modsec_audit.log#' \
+  -e 's#^SecAuditLog .*#SecAuditLog @DATA_DIR@/logs/modsec_audit.json#' \
   -e 's#^SecUnicodeMapFile .*#SecUnicodeMapFile /opt/liteedge/etc/modsecurity/unicode.mapping 20127#' \
   "$PREFIX/etc/modsecurity/modsecurity.conf.template"
-printf '\nSecTmpDir @RUN_DIR@\nSecDataDir @RUN_DIR@\n' >> "$PREFIX/etc/modsecurity/modsecurity.conf.template"
+printf '\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogParts AFHZ\nSecAuditEngine RelevantOnly\nSecTmpDir @RUN_DIR@\nSecDataDir @RUN_DIR@\n' >> "$PREFIX/etc/modsecurity/modsecurity.conf.template"
 cp -a "$ROOT/bin/." "$PREFIX/bin/"
 cp -a "$ROOT/cgi/." "$PREFIX/cgi/"
 cp -a "$ROOT/ui/." "$PREFIX/ui/"
@@ -96,6 +96,7 @@ curl -fsSL --retry 3 "https://cdn.jsdelivr.net/npm/bootstrap@${BOOTSTRAP_VERSION
 echo "${BOOTSTRAP_SHA256}  $PREFIX/ui/bootstrap.min.css" | sha256sum -c -
 install -m 0755 "$ROOT/entrypoint.sh" "$PREFIX/entrypoint.sh"
 install -m 0644 "$ROOT/nginx/nginx.conf" "$PREFIX/etc/nginx/nginx.conf"
+install -m 0644 "$ROOT/nginx/logrotate-observability.conf" "$PREFIX/etc/logrotate-observability.conf"
 install -m 0644 "$ROOT/nginx/admin.conf" "$PREFIX/etc/nginx/admin.conf.template"
 install -m 0644 "$ROOT/nginx/admin-http.conf" "$PREFIX/etc/nginx/admin-http.conf.template"
 install -m 0644 "$ROOT/nginx/security.conf" "$PREFIX/etc/nginx/security.conf"
@@ -148,6 +149,8 @@ patch
 libmaxminddb
 lua5.3-libs
 jq
+socat
+logrotate
 EOF_RUNTIME
 {
   cat "$ROOT/build/versions.env"

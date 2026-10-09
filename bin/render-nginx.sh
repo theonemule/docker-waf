@@ -128,6 +128,7 @@ emit_route_values() {
 
   id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
   printf '    %s {\n' "$location"
+  printf '        set $liteedge_route "%s";\n' "$match:$path"
 
   if [[ "$scheme" == http && "$force_https" == 1 && "$cert_exists" == 1 ]]; then
     echo "        return 301 https://\$host$HTTPS_REDIRECT_SUFFIX\$request_uri;"
