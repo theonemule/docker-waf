@@ -106,19 +106,33 @@ def collect(src: Path, data_root: Path, dry_run: bool) -> dict:
         template = template[:st]+repl+template[ed:]
     if not dry_run:
         (imported / 'locations').mkdir(parents=True, exist_ok=True)
-        (data_root/'sites'/(name+'.routes')).mkdir(exist_ok=True)
-        (imported/'template.conf').write_text(template)
+        imported.chmod(0o700)
+        (imported / 'locations').chmod(0o700)
+        route_dir = data_root/'sites'/(name+'.routes')
+        route_dir.mkdir(exist_ok=True)
+        route_dir.chmod(0o700)
+        template_path = imported/'template.conf'
+        if template_path.exists() and template_path.read_text() != template:
+            raise ValueError(f'Import template already changed for {name}; refusing overwrite')
+        template_path.write_text(template)
+        template_path.chmod(0o600)
         for ent in entries:
-            (imported/'locations'/(ent['key']+'.conf')).write_text(ent['snippet'])
+            snippet_path = imported/'locations'/(ent['key']+'.conf')
+            if snippet_path.exists() and snippet_path.read_text() != ent['snippet']:
+                raise ValueError('Imported location snippet changed; refusing overwrite')
+            snippet_path.write_text(ent['snippet'])
+            snippet_path.chmod(0o600)
             fields = [('ID',ent['id']),('MATCH',ent['match']),('PATH',ent['path']),
                     ('ACTION',ent['action']),('TARGET',ent['target']),('WEBSOCKET',str(ent['websocket'])),
                     ('TIMEOUT',str(ent['timeout'])),('WAF','0'),('FORCE_HTTPS','0'),('WAF_PL','1'),
                     ('WAF_PLUGINS',''),('WAF_DISABLED',''),('IMPORT_KEY',ent['key']),
                     ('IMPORT_ORIGINAL_TARGET',ent['target']),('IMPORT_ORIGINAL_TIMEOUT',str(ent['timeout'])),('IMPORT_SCHEME',ent['scheme'])]
             routefile = data_root/'sites'/(name+'.routes')/(ent['id']+'.route')
-            if routefile.exists():
-                raise ValueError(f'Refusing to overwrite managed route {routefile}')
+            expected = ''.join(f'{k}={v}\n' for k,v in fields)
+            if routefile.exists() and routefile.read_text() != expected:
+                raise ValueError(f'Refusing to overwrite modified managed route {routefile}')
             routefile.write_text(''.join(f'{k}={v}\n' for k,v in fields))
+            routefile.chmod(0o600)
     return {'site':name,'locations':len(entries),'reverse_proxies':sum(x['action']=='proxy' for x in entries),
             'custom_locations':sum(x['action']=='custom' for x in entries),
             'http':sum(x['scheme']=='http' for x in entries),'https':sum(x['scheme']=='https' for x in entries)}
