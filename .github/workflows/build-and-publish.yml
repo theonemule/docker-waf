@@ -121,14 +121,15 @@ jobs:
           docker run -d --name docker-waf-v3-ci \
             -e ADMIN_USER=admin \
             -e ADMIN_PASSWORD=test-password \
-            -e LITEEDGE_ADMIN_HTTP_ONLY=1 \
-            -p 18080:8080 \
+            -p 127.0.0.1:18080:8080 \
+            -p 127.0.0.1:19443:9443 \
             "${IMAGE_NAME}:ci"
 
           trap 'docker logs docker-waf-v3-ci || true; docker rm -f docker-waf-v3-ci >/dev/null 2>&1 || true' EXIT
           for _ in $(seq 1 30); do
-            code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ || true)"
-            if [[ "$code" == "401" ]]; then
+            admin_code="$(curl -ks -o /dev/null -w '%{http_code}' https://127.0.0.1:19443/ || true)"
+            public_code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18080/ || true)"
+            if [[ "$admin_code" == "401" && "$public_code" == "404" ]]; then
               exit 0
             fi
             sleep 2
