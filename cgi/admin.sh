@@ -312,6 +312,8 @@ HTML
       match="$(kv_get "$route" MATCH)"
       path="$(kv_get "$route" PATH)"
       target="$(kv_get "$route" TARGET)"
+      action="$(kv_get "$route" ACTION)"
+      [[ -n "$action" ]] || action=proxy
       websocket="$(kv_get "$route" WEBSOCKET)"; [[ "$websocket" =~ ^[01]$ ]] || websocket=1
       timeout="$(kv_get "$route" TIMEOUT)"; [[ -n "$timeout" ]] || timeout="$default_timeout"
       waf="$(kv_get "$route" WAF)"; [[ "$waf" =~ ^[01]$ ]] || waf=1
@@ -328,7 +330,12 @@ HTML
 
       cat <<HTML
 <details class="border rounded p-3 mb-3">
-<summary class="d-flex flex-wrap gap-2 align-items-center"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "$target")</code><span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</summary>
+<summary class="d-flex flex-wrap gap-2 align-items-center"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "${target:-(native Nginx action)}")</code>$([[ "$action" == custom ]] && echo '<span class="badge text-bg-secondary">Imported custom</span>')<span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</summary>
+HTML
+      if [[ "$action" == custom ]]; then
+        echo '<p class="small text-secondary mt-3">This imported route has custom Nginx behavior (redirect, health check, or ACME). Its original directives are preserved in the site Advanced NGINX configuration. Proxy targets are editable directly on proxy routes.</p>'
+      else
+        cat <<HTML
 <form method="post" action="/admin/route/save" class="mt-3"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix" $(selected "$match" prefix)>Prefix</option><option value="exact" $(selected "$match" exact)>Exact</option><option value="regex" $(selected "$match" regex)>Regex</option></select></div>
@@ -358,6 +365,9 @@ HTML
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="https_$id" $(checkbox "$force_https")><label class="form-check-label" for="https_$id">HTTP → HTTPS</label></div>
 </div>
 <button class="btn btn-sm btn-primary mt-3" type="submit">Save route</button></form>
+HTML
+      fi
+      cat <<HTML
 <form method="post" action="/admin/route/delete" class="mt-2"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete route</button></form>
 </details>
 HTML

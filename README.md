@@ -328,3 +328,37 @@ screen, CSV downloads and JSONL downloads. The backend validates requested
 host/route combinations against the current inventory. Older host/route query
 parameters still work for bookmarked URLs. Run `bash tests/test-log-selectors.sh`
 for multi-site, aliases, WAF events, status classes and tampered-filter cases.
+
+### Import native NGINX virtual hosts into managed routes
+
+LiteEdge can convert preserved NGINX virtual hosts into managed site and route
+records without dropping legacy location-level behavior. Import is an explicit,
+**offline staging operation**, never a blind startup overwrite:
+
+```bash
+python3 scripts/import-native-nginx.py --data /path/to/copied/data --dry-run
+python3 scripts/import-native-nginx.py --data /path/to/copied/data
+```
+
+The importer reads `data/migration/sites/*.conf` and already-registered
+`data/sites/*.site`, producing a `.route` for each native `location` and
+per-site templates under `data/imported/sites/`. NGINX server-level settings
+and location-specific auth, request limits, redirects, health checks, ACME
+exceptions, WebSocket headers, and certificate references remain preserved.
+Proxy target, location path/match, timeout and WAF enablement on imported proxy
+routes participate in generated NGINX configuration, and route additions or
+deletions also affect the output. Imported custom return/ACME locations appear
+in the Routes inventory and remain editable via Advanced NGINX rather than
+being incorrectly presented as reverse proxies.
+
+The runtime checks for `data/imported/sites/<hostname>/template.conf` and
+regenerates the site from managed route records, replacing the former opaque
+config-copy approach. No certificates, private keys, or API keys are checked
+into source control. The original native configuration and site state should
+be backed up and its behavior verified on isolated ports before cutover.
+
+An imported TLS certificate is retained as `mode=imported` and **is not
+silently enrolled for automatic renewal**. Configure and validate automated
+renewal separately before certificate expiration. Run
+`bash tests/test-native-nginx-migration.sh` to check importer idempotence,
+custom locations, managed proxy edits, WAF, timeouts and route creation.

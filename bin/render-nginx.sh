@@ -153,6 +153,7 @@ emit_route_values() {
 emit_route() {
   local host="$1" route="$2" scheme="$3" cert_exists="$4"
   local match path target websocket timeout waf force_https waf_pl waf_plugins waf_disabled legacy_profile
+  [[ "$(route_value "$route" ACTION proxy)" == custom ]] && return 0
   match="$(route_value "$route" MATCH prefix)"
   path="$(route_value "$route" PATH /)"
   target="$(route_value "$route" TARGET "")"
@@ -311,6 +312,12 @@ CONF
       echo "}"
     fi
   } > "$generated"
+
+  # Imported sites use native server directives plus managed route records.
+  # The preserved template is authoritative, not a second opaque conf overlay.
+  if [[ -s "$DATA_DIR/imported/sites/$slug/template.conf" ]]; then
+    /opt/liteedge/bin/render-imported.sh "$host" "$generated"
+  fi
 
   record_generated_diff "$host" "$generated"
   merge_manual_delta "$host" "$generated" "$out"
