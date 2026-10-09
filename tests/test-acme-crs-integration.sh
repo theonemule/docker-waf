@@ -27,6 +27,68 @@ export DATA_DIR="$TMP/data" ACME_TEST_COMMON="$TMP/common.sh"
 [[ "$(cat "$TMP/data/certs/one.example/acme-email")" == one@example.org ]]
 [[ "$(cat "$TMP/data/certs/two.example/acme-email")" == two@example.net ]]
 [[ "$(stat -c '%a' "$TMP/data/certs/one.example/acme-email")" == 600 ]]
+
+# Regression: both account registration and certificate issuance must use
+# the same *site-specific, existing* config file. Previously --cron wrongly
+# pointed to /data/acme/config even after a successful site registration.
+mkdir -p "$TMP/testbin" "$TMP/data/acme/certs/one.example" "$TMP/data/acme/certs/two.example"
+cat > "$TMP/testbin/dehydrated" <<'MOCK_ACME'
+#!/usr/bin/env bash
+set -euo pipefail
+mode='' config='' cert_alias=''
+while (( $# )); do
+  case "$1" in
+    --register) mode=register; shift ;;
+    --cron) mode=cron; shift ;;
+    --config) config="$2"; shift 2 ;;
+    --alias) cert_alias="$2"; shift 2 ;;
+    --domain) shift 2 ;;
+    *) shift ;;
+  esac
+done
+[[ -s "$config" && "$config" == "$DATA_DIR/acme/sites/"*/config ]]
+base="$(dirname "$config")"
+grep -Fq 'CONTACT_EMAIL=' "$config"
+if [[ "$mode" == register ]]; then
+  mkdir -p "$base/accounts/fake"
+  printf 'registered\n' > "$base/accounts/fake/registration"
+elif [[ "$mode" == cron ]]; then
+  [[ -d "$base/accounts/fake" && -n "$cert_alias" ]]
+  mkdir -p "$DATA_DIR/acme/certs/$cert_alias"
+  openssl req -x509 -newkey rsa:2048 -nodes -days 1 -keyout "$DATA_DIR/acme/certs/$cert_alias/privkey.pem" -out "$DATA_DIR/acme/certs/$cert_alias/fullchain.pem" -subj "/CN=$cert_alias" >/dev/null 2>&1
+else
+  exit 1
+fi
+printf '%s %s\n' "$mode" "$config" >> "$DATA_DIR/mock-acme-calls.log"
+MOCK_ACME
+chmod +x "$TMP/testbin/dehydrated"
+# The final install/reload is simulated: test only reads and writes temporary data.
+cat > "$TMP/testbin/render-nginx.sh" <<'MOCK_RENDER'
+#!/bin/sh
+exit 0
+MOCK_RENDER
+chmod +x "$TMP/testbin/render-nginx.sh"
+# Intercept absolute helper paths in the isolated test script.
+sed -i 's@/opt/liteedge/bin/render-nginx.sh@"$ACME_TEST_RENDER"@g; s@reload_nginx$@true@g' "$TMP/testbin/certctl.sh"
+export PATH="$TMP/testbin:$PATH" ACME_TEST_RENDER="$TMP/testbin/render-nginx.sh"
+"$TMP/testbin/certctl.sh" letsencrypt one.example one@example.org >/dev/null
+"$TMP/testbin/certctl.sh" letsencrypt two.example two@example.net >/dev/null
+[[ "$(grep -c '^register ' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+[[ "$(grep -c '^cron ' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+[[ "$(grep -c '/acme/sites/one.example/config$' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+[[ "$(grep -c '/acme/sites/two.example/config$' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+# Reusing an existing registration never refers to a nonexistent global config.
+"$TMP/testbin/certctl.sh" letsencrypt one.example one@example.org >/dev/null
+[[ "$(grep -c '^register ' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+[[ "$(grep -c '^cron ' "$TMP/data/mock-acme-calls.log")" == 3 ]]
+# Failed earlier issuance may have registered an ACME account before saving
+# the per-site email; a retry without resubmitting it must still work.
+rm -f "$TMP/data/certs/one.example/acme-email"
+"$TMP/testbin/certctl.sh" letsencrypt one.example >/dev/null
+[[ "$(grep -c '^register ' "$TMP/data/mock-acme-calls.log")" == 2 ]]
+[[ "$(grep -c '^cron ' "$TMP/data/mock-acme-calls.log")" == 4 ]]
+
+
 if "$TMP/testbin/certctl.sh" set-email one.example 'malicious";foo@example.org' >/dev/null 2>&1; then
   echo 'Unsafe email accepted' >&2; exit 1
 fi
