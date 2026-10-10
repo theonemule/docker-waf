@@ -9,7 +9,7 @@ grep -Fq 'build-iso:' "$ROOT/.github/workflows/build-and-publish.yml"
 grep -Fq 'build-appliance, build-container, build-iso' "$ROOT/.github/workflows/build-and-publish.yml"
 grep -Fq 'lteedge' "$ROOT/scripts/mkimg.liteedge.sh" && { echo 'Typo in ISO profile' >&2; exit 1; } || true
 grep -Fq 'apkovl="genapkovl-liteedge.sh"' "$ROOT/scripts/mkimg.liteedge.sh"
-grep -Fq 'linux-lts' "$ROOT/scripts/genapkovl-liteedge.sh"
+grep -Fq 'linux-virt' "$ROOT/scripts/genapkovl-liteedge.sh"
 grep -Fq 'grub-efi' "$ROOT/scripts/genapkovl-liteedge.sh"
 grep -Fq 'fcgiwrap' "$ROOT/scripts/genapkovl-liteedge.sh"
 grep -Fq 'spawn-fcgi' "$ROOT/scripts/genapkovl-liteedge.sh"

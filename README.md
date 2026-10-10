@@ -434,7 +434,7 @@ matches. A tagged v3 release publishes the ISO as a GitHub Release asset;
 main-branch and PR builds retain the ISO as a workflow artifact for 30 days.
 
 The bootable ISO is made with Alpine Linux 3.22's native `mkimage` tool,
-using the x86_64 LTS kernel, BIOS (ISOLINUX) and UEFI (GRUB) boot loaders.
+using the x86_64 virtual-machine kernel, BIOS (ISOLINUX) and UEFI (GRUB) boot loaders.
 It contains the full signed, dependency-closed Alpine APK repository needed
 for the OS installation and LiteEdge runtime, plus the compiled LiteEdge
 archive and checksum. **Building** the ISO requires internet access;

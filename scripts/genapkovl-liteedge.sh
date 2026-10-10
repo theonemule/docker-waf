@@ -22,7 +22,7 @@ alpine-base
 alpine-conf
 alpine-keys
 openrc
-linux-lts
+linux-virt
 grub-bios
 grub-efi
 efibootmgr

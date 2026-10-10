@@ -3,7 +3,7 @@
 # A custom Alpine 3.22 ISO containing the complete offline package dependency
 # closure plus the standalone LiteEdge payload inside its live overlay.
 profile_liteedge() {
-    profile_standard
+    profile_virt
     image_name="liteedge-vm-installer"
     profile_abbrev="ledg"
     title="LiteEdge virtual appliance installer"
@@ -15,7 +15,7 @@ profile_liteedge() {
     # Packages in world will be installed into the target by setup-disk.
     # Packages in apks are vendored into the ISO with their dependency closure.
     apks="$apks
-        alpine-conf alpine-keys openrc linux-lts
+        alpine-conf alpine-keys openrc linux-virt
         grub-bios grub-efi efibootmgr syslinux
         e2fsprogs dosfstools parted sfdisk util-linux
         bash ca-certificates curl openssl tzdata
