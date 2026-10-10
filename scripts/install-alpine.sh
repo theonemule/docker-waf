@@ -5,10 +5,12 @@ REPO="${LITEEDGE_REPO:-theonemule/docker-waf}"
 VERSION="${LITEEDGE_VERSION:-latest}"
 START=1
 GENERATED_PASSWORD=""
+OFFLINE_DIR=""
 
 usage() {
   cat <<USAGE
 Usage: $0 [--version TAG|latest] [--repo OWNER/REPO] [--no-start]
+       $0 --offline-dir /etc/liteedge-offline [--no-start]
 
 Installs the complete prebuilt LiteEdge release on Alpine Linux. The release
 contains NGINX with the ModSecurity connector compiled in, libModSecurity,
@@ -21,6 +23,7 @@ while [ "$#" -gt 0 ]; do
     --version) VERSION="$2"; shift 2 ;;
     --repo) REPO="$2"; shift 2 ;;
     --no-start) START=0; shift ;;
+    --offline-dir) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; OFFLINE_DIR="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
@@ -42,39 +45,51 @@ case "$(uname -m)" in
   *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-apk add --no-cache \
-  bash ca-certificates curl openssl tzdata \
-  fcgiwrap spawn-fcgi \
-  pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb \
-  coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc
-
-if [ "$VERSION" = "latest" ]; then
-  VERSION="$(
-    curl -fsSL --proto '=https' --tlsv1.2 \
-      "https://api.github.com/repos/$REPO/releases/latest" |
-      sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
-      head -n1
-  )"
-  [ -n "$VERSION" ] || {
-    echo "Could not determine latest release for $REPO." >&2
-    exit 1
-  }
+# The offline ISO includes all runtime dependencies in /etc/apk/world and
+# installs them from its signed, on-media APK repository during setup-disk.
+# On first boot the ISO is removed, so the installer must never use a network
+# repository or download a GitHub release in offline mode.
+RUNTIME_PACKAGES="bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc"
+if [ -n "$OFFLINE_DIR" ]; then
+  [ -d "$OFFLINE_DIR" ] || { echo "Offline directory missing: $OFFLINE_DIR" >&2; exit 1; }
+  for package in $RUNTIME_PACKAGES; do
+    apk info -e "$package" >/dev/null 2>&1 || {
+      echo "Required offline dependency is not installed: $package" >&2; exit 1;
+    }
+  done
+  ASSET="liteedge-linux-musl-${ARCH}.tar.gz"
+  if [ ! -s "$OFFLINE_DIR/$ASSET" ] || [ ! -s "$OFFLINE_DIR/$ASSET.sha256" ]; then
+    echo 'Bundled LiteEdge archive or checksum missing.' >&2; exit 1;
+  fi
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+  cp "$OFFLINE_DIR/$ASSET" "$OFFLINE_DIR/$ASSET.sha256" "$TMP/"
+  VERSION="offline-iso"
+else
+  # shellcheck disable=SC2086
+  apk add --no-cache $RUNTIME_PACKAGES
+  if [ "$VERSION" = "latest" ]; then
+    VERSION="$(
+      curl -fsSL --proto '=https' --tlsv1.2 \
+        "https://api.github.com/repos/$REPO/releases/latest" |
+        sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' |
+        head -n1
+    )"
+    [ -n "$VERSION" ] || {
+      echo "Could not determine latest release for $REPO." >&2
+      exit 1
+    }
+  fi
+  ASSET="liteedge-linux-musl-${ARCH}.tar.gz"
+  BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT HUP INT TERM
+  curl -fL --retry 3 --proto '=https' --tlsv1.2 \
+    -o "$TMP/$ASSET" "$BASE_URL/$ASSET"
+  curl -fL --retry 3 --proto '=https' --tlsv1.2 \
+    -o "$TMP/$ASSET.sha256" "$BASE_URL/$ASSET.sha256"
 fi
-
-ASSET="liteedge-linux-musl-${ARCH}.tar.gz"
-BASE_URL="https://github.com/$REPO/releases/download/$VERSION"
-TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT HUP INT TERM
-
-curl -fL --retry 3 --proto '=https' --tlsv1.2 \
-  -o "$TMP/$ASSET" "$BASE_URL/$ASSET"
-curl -fL --retry 3 --proto '=https' --tlsv1.2 \
-  -o "$TMP/$ASSET.sha256" "$BASE_URL/$ASSET.sha256"
-
-(
-  cd "$TMP"
-  sha256sum -c "$ASSET.sha256"
-)
+(cd "$TMP" && sha256sum -c "$ASSET.sha256")
 
 was_running=0
 if rc-service liteedge status >/dev/null 2>&1; then

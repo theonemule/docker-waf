@@ -423,3 +423,52 @@ retained across filter submissions and browser Back navigation.
 ### Change administrator password
 
 Go to **Server Settings → Administrator password** and enter the current password, a new password, and confirmation. The authenticated password-change endpoint validates the existing SHA-512-crypt HTTP Basic Auth credential, atomically updates the persisted data-volume htpasswd file, and requires the new password for subsequent requests. Passwords are transmitted to the helper over standard input, not command-line arguments, and never logged. This change survives container rebuilds. If the current password is lost, the machine administrator must reset the authentication file from the host; no unauthenticated web reset is provided.
+
+## Offline virtual-machine installer ISO
+
+Each release now also produces **liteedge-vm-installer-VERSION-x86_64.iso** and
+its SHA-256 checksum, alongside the standalone Linux binaries and Docker image.
+GitHub Actions builds the standalone binaries **once**. The Docker and ISO
+jobs consume that same verified artifact, so their included LiteEdge version
+matches. A tagged v3 release publishes the ISO as a GitHub Release asset;
+main-branch and PR builds retain the ISO as a workflow artifact for 30 days.
+
+The bootable ISO is made with Alpine Linux 3.22's native `mkimage` tool,
+using the x86_64 virtual-machine kernel, BIOS (ISOLINUX) and UEFI (GRUB) boot loaders.
+It contains the full signed, dependency-closed Alpine APK repository needed
+for the OS installation and LiteEdge runtime, plus the compiled LiteEdge
+archive and checksum. **Building** the ISO requires internet access;
+**installing** an Alpine/LiteEdge VM from the ISO does **not**. The VM must
+have at least 2 GB RAM, a 4 GB virtual disk (8 GB recommended), a network
+adapter, and a mounted virtual CD/DVD drive. Use an ordinary virtual BIOS
+or UEFI VM. UEFI Secure Boot is **not** supported by the unsigned GRUB loader.
+
+### Installing in Proxmox, Hyper-V, VMware, VirtualBox or KVM
+
+1. Verify the ISO against its adjacent `.sha256` and mount it on the VM.
+   Boot the VM from the ISO, and log in as `root` (no password in the
+   installer live environment).
+2. Run `sh /etc/liteedge-offline/vm-iso-install.sh`. Select the target
+   **virtual disk**, explicitly confirm erasure, and complete Alpine's normal
+   prompts to set the *OS root password* and network/SSH configuration.
+   The installer configures the on-ISO APK repository and runs
+   `setup-alpine` in system-installation mode. It does **not** download
+   packages, look up GitHub releases, or need a working internet connection.
+3. Once Alpine reports disk installation complete, **eject the ISO** and
+   reboot. The included one-time OpenRC `local.d` service extracts and
+   installs LiteEdge from the offline bundle on first boot. It generates a
+   random administrator password **inside the VM**.
+4. Log into the VM console as root and inspect
+   `cat /root/liteedge-install.txt` (root-readable only) for the LiteEdge
+   credentials. Open `https://VM_IP:8443/` to administer LiteEdge. Routes
+   listen on 80/443. The state is persisted under `/var/lib/liteedge`.
+   To change the password later, use **Server Settings**.
+
+The installer preserves no baked-in user password, SSH host keys, API tokens,
+or signing private key. The live disk installer requires intentional disk
+selection and typing **ERASE**. The ISO's Alpine APK signing index is generated
+at build time, and its public signing key is embedded by the Alpine image
+builder. This is a fresh installation, not a backup/restore of the existing
+LiteEdge appliance. The first-boot service fails closed if a dependency or
+release checksum is missing or invalid; its diagnostic output is stored in
+`/root/liteedge-install.txt`.
