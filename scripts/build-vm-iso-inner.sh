@@ -39,4 +39,14 @@ mkdir -p "$work/verify"
 xorriso -osirrox on -indev "$output" -extract /liteedge.apkovl.tar.gz "$work/verify/liteedge.apkovl.tar.gz" >/dev/null 2>&1
 tar -tzf "$work/verify/liteedge.apkovl.tar.gz" | grep -q 'etc/liteedge-offline/liteedge-linux-musl-x86_64.tar.gz'
 tar -tzf "$work/verify/liteedge.apkovl.tar.gz" | grep -q 'etc/local.d/liteedge-firstboot.start'
-echo 'PASS: ISO has BIOS and UEFI loaders, offline Alpine APK index and embedded LiteEdge payload'
+# Prove the complete on-media dependency closure can be resolved and fetched
+# with zero network. This also verifies the locally signed repository index.
+xorriso -osirrox on -indev "$output" -extract /apks "$work/verify/apks" >/dev/null 2>&1
+mkdir -p "$work/verify/offline-fetch"
+world="$(tar -xOzf "$work/verify/liteedge.apkovl.tar.gz" etc/apk/world)"
+# shellcheck disable=SC2086
+apk --no-network --repositories-file /dev/null --repository "$work/verify/apks" \
+    fetch --recursive --output "$work/verify/offline-fetch" $world >/dev/null
+count="$(find "$work/verify/offline-fetch" -name '*.apk' | wc -l)"
+[ "$count" -ge 100 ] || { echo 'Offline APK dependency verification incomplete' >&2; exit 1; }
+echo "PASS: ISO has BIOS/UEFI boot, signed offline APKs ($count resolved), and embedded LiteEdge"

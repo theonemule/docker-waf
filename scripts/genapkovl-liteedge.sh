@@ -23,8 +23,6 @@ alpine-conf
 alpine-keys
 openrc
 linux-virt
-grub-bios
-grub-efi
 efibootmgr
 syslinux
 e2fsprogs
@@ -66,7 +64,20 @@ cp "$root/scripts/install-alpine.sh" "$tmp/etc/liteedge-offline/install-alpine.s
 cp "$root/scripts/vm-iso-install.sh" "$tmp/etc/liteedge-offline/vm-iso-install.sh"
 cp "$root/scripts/vm-firstboot.sh" "$tmp/etc/local.d/liteedge-firstboot.start"
 chmod 755 "$tmp/etc/local.d/liteedge-firstboot.start" "$tmp/etc/liteedge-offline/vm-iso-install.sh"
-# Enables a one-shot first boot installer on the new disk.
+# Install standard Alpine live OpenRC services; preserve them on the target
+# when setup-disk saves the overlay. Enable LiteEdge only on installed root.
+for service in devfs dmesg mdev hwdrivers modloop; do
+    mkdir -p "$tmp/etc/runlevels/sysinit"
+    ln -s "/etc/init.d/$service" "$tmp/etc/runlevels/sysinit/$service"
+done
+for service in hwclock modules sysctl hostname bootmisc syslog; do
+    mkdir -p "$tmp/etc/runlevels/boot"
+    ln -s "/etc/init.d/$service" "$tmp/etc/runlevels/boot/$service"
+done
+for service in mount-ro killprocs savecache; do
+    mkdir -p "$tmp/etc/runlevels/shutdown"
+    ln -s "/etc/init.d/$service" "$tmp/etc/runlevels/shutdown/$service"
+done
 ln -s /etc/init.d/local "$tmp/etc/runlevels/default/local"
 cat > "$tmp/etc/profile.d/liteedge-iso.sh" <<'PROFILE'
 # Present install guidance only on the live installer, not the installed system.
