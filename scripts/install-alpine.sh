@@ -58,9 +58,9 @@ if [ -n "$OFFLINE_DIR" ]; then
     }
   done
   ASSET="liteedge-linux-musl-${ARCH}.tar.gz"
-  [ -s "$OFFLINE_DIR/$ASSET" ] && [ -s "$OFFLINE_DIR/$ASSET.sha256" ] || {
+  if [ ! -s "$OFFLINE_DIR/$ASSET" ] || [ ! -s "$OFFLINE_DIR/$ASSET.sha256" ]; then
     echo 'Bundled LiteEdge archive or checksum missing.' >&2; exit 1;
-  }
+  fi
   TMP="$(mktemp -d)"
   trap 'rm -rf "$TMP"' EXIT HUP INT TERM
   cp "$OFFLINE_DIR/$ASSET" "$OFFLINE_DIR/$ASSET.sha256" "$TMP/"

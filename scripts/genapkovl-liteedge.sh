@@ -6,10 +6,10 @@ HOSTNAME="${1:?hostname is required}"
 root="$LITEEDGE_ISO_SOURCE"
 tarball="$root/dist/liteedge-linux-musl-x86_64.tar.gz"
 checksum="$tarball.sha256"
-test -s "$tarball" && test -s "$checksum" || {
+if [ ! -s "$tarball" ] || [ ! -s "$checksum" ]; then
     echo 'Build the native LiteEdge payload before building the ISO.' >&2
     exit 1
-}
+fi
 (cd "$root/dist" && sha256sum -c "$(basename "$checksum")") >/dev/null
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
