@@ -947,6 +947,19 @@ server_page() {
 <div class="col-md-4"><label class="form-label">Send timeout</label><input class="form-control" type="number" name="send_timeout" value="$(html_escape "$send")" required></div>
 <div class="col-md-6"><label class="form-label">DNS resolver</label><input class="form-control font-monospace" name="resolver" value="$(html_escape "$resolver")" placeholder="Automatic from /etc/resolv.conf"><div class="form-text">Leave blank for automatic detection.</div></div>
 </div></div><div class="card-footer text-end"><button class="btn btn-primary">Save server settings</button></div></form>
+<section class="card shadow-sm mt-4" aria-labelledby="passwordHeading">
+  <div class="card-header"><strong id="passwordHeading">Administrator password</strong></div>
+  <form method="post" action="/admin/password/change" data-native-submit>
+    <div class="card-body"><p class="text-secondary">Change the administrator password. It is stored in persistent LiteEdge configuration, including after Docker rebuilds.</p>
+      <div class="row g-3">
+        <div class="col-md-6"><label class="form-label" for="current_admin_password">Current password</label><input class="form-control" id="current_admin_password" name="current_password" type="password" autocomplete="current-password" required></div>
+        <div class="col-md-6"><label class="form-label" for="new_admin_password">New password</label><input class="form-control" id="new_admin_password" name="new_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></div>
+        <div class="col-md-6"><label class="form-label" for="confirm_admin_password">Confirm new password</label><input class="form-control" id="confirm_admin_password" name="confirm_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></div>
+      </div>
+    </div>
+    <div class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2"><small class="text-secondary">You will need to sign in again with your new password.</small><button class="btn btn-primary" type="submit">Change admin password</button></div>
+  </form>
+</section>
 HTML
   page_tail
 }
@@ -1477,6 +1490,19 @@ handle_post() {
       run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}" "${PARAM[smtp_host]:-}" "${PARAM[smtp_port]:-587}" "${PARAM[smtp_user]:-}" "${PARAM[smtp_password]:-}" "${PARAM[mail_from]:-}"
       redirect "/admin/collector"
       ;;
+    /admin/password/change)
+      output=""
+      if ! output="$(printf '%s\n%s\n%s\n' "${PARAM[current_password]:-}" "${PARAM[new_password]:-}" "${PARAM[confirm_password]:-}" | /opt/liteedge/bin/adminctl.sh change-password 2>&1)"; then
+        error_page "$output"
+      fi
+      page_head "Password changed"
+      cat <<'HTML'
+<div class="alert alert-success" role="status"><h1 class="h5">Administrator password updated</h1><p class="mb-0">The new password is active and saved. Open Server Settings again and authenticate with your new password.</p></div>
+<a class="btn btn-primary" href="/admin/server">Return to Server Settings</a>
+HTML
+      page_tail
+      ;;
+
     /admin/server/save)
       run_or_error /opt/liteedge/bin/serverctl.sh save "${PARAM[worker_connections]:-1024}" "${PARAM[keepalive_timeout]:-65}" "${PARAM[header_timeout]:-15}" "${PARAM[body_timeout]:-15}" "${PARAM[send_timeout]:-30}" "${PARAM[route_timeout]:-60}" "${PARAM[resolver]:-}"
       redirect "/admin/server"
@@ -1543,7 +1569,7 @@ case "$path" in
   /admin/logs/export) logs_export ;;
   /admin/alerts) alerts_page ;;
   /admin/collector) collector_page ;;
-  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
+  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
     handle_post "$path" ;;
   *)
     page_head "Not found"

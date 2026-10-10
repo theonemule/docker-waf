@@ -419,3 +419,7 @@ event type, status, method, port, timestamp or text filter and then click
 results/empty states render after it completes. Blank queries, including blank
 CSV/JSONL exports, are rejected. Search state and selected hosts/routes are
 retained across filter submissions and browser Back navigation.
+
+### Change administrator password
+
+Go to **Server Settings → Administrator password** and enter the current password, a new password, and confirmation. The authenticated password-change endpoint validates the existing SHA-512-crypt HTTP Basic Auth credential, atomically updates the persisted data-volume htpasswd file, and requires the new password for subsequent requests. Passwords are transmitted to the helper over standard input, not command-line arguments, and never logged. This change survives container rebuilds. If the current password is lost, the machine administrator must reset the authentication file from the host; no unauthenticated web reset is provided.
