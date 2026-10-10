@@ -14,8 +14,10 @@ export PACKAGER_PRIVKEY
 out=/src/dist
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
-git clone -q --depth 1 --branch "$APORTS_REF" \
-    https://gitlab.alpinelinux.org/alpine/aports.git "$work/aports"
+# Use the official GitHub Alpine aports mirror to avoid GitLab HTTP 418 in CI.
+git clone -q --depth 1 --filter=blob:none --sparse --branch "$APORTS_REF" \
+    https://github.com/alpinelinux/aports.git "$work/aports"
+git -C "$work/aports" sparse-checkout set scripts
 cp /src/scripts/mkimg.liteedge.sh "$work/aports/scripts/mkimg.liteedge.sh"
 cp /src/scripts/genapkovl-liteedge.sh "$work/aports/scripts/genapkovl-liteedge.sh"
 cd "$work/aports/scripts"
