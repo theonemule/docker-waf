@@ -44,6 +44,7 @@ jobs:
           bash tests/test-log-selectors.sh
           bash tests/test-native-nginx-migration.sh
           bash tests/test-acme-crs-integration.sh
+          bash tests/test-admin-password.sh
           node tests/test-ui-import.js
           node tests/test-logs-ui.js
           python3 tests/test-http-api-coverage.py

@@ -23,7 +23,8 @@ args=(run -d --name "$NAME" -e ADMIN_USER=admin -e "ADMIN_PASSWORD=$PASS" -e LIT
   -v "$TEMP/admin-no-rate.conf:/opt/liteedge/etc/nginx/admin.conf.template:ro")
 if [[ "${LITEEDGE_TEST_MOUNT_SOURCE:-0}" == 1 ]]; then
   args+=(-v "$ROOT/cgi/admin.sh:/opt/liteedge/cgi/admin.sh:ro"
-         -v "$ROOT/ui/admin.js:/opt/liteedge/ui/admin.js:ro")
+         -v "$ROOT/ui/admin.js:/opt/liteedge/ui/admin.js:ro"
+         -v "$ROOT/bin/adminctl.sh:/opt/liteedge/bin/adminctl.sh:ro")
 fi
 args+=("$IMAGE")
 docker "${args[@]}" >/dev/null
@@ -69,6 +70,31 @@ for path in / /admin/site?host=missing.test /admin/owasp /admin/server /admin/lo
 done
 assert_code 200 "$(get /admin/not-an-endpoint)" 'Unknown endpoint response'
 assert_body 'Page not found'
+assert_code 200 "$(get '/admin/server')" 'Password settings available'
+assert_body 'Administrator password'
+assert_body 'action="/admin/password/change"'
+# First test the actual backend: a wrong current credential leaves the old
+# Basic Auth credential operational; a valid change immediately rejects it.
+assert_code 200 "$(post /admin/password/change -d 'current_password=invalid-value' -d 'new_password=example-updated-credential' -d 'confirm_password=example-updated-credential')" 'Reject wrong current password'
+assert_body 'Current password is incorrect'
+assert_code 200 "$(get '/admin/server')" 'Old credential still valid after failure'
+assert_code 200 "$(post /admin/password/change -d "current_password=$PASS" -d 'new_password=example-updated-credential' -d 'confirm_password=example-updated-credential')" 'Change admin password'
+assert_body 'Administrator password updated'
+assert_code 401 "$(get '/admin/server')" 'Old Basic Auth credential rejected'
+PASS='example-updated-credential'
+assert_code 200 "$(get '/admin/server')" 'New Basic Auth credential accepted'
+# Restart with the same persistent volume to prove credentials do not revert.
+docker restart "$NAME" >/dev/null
+# Refresh the ephemeral published port after restart.
+PORT="$(docker port "$NAME" 9443/tcp | awk -F: 'END {print $NF}')"
+URL="https://127.0.0.1:$PORT"
+for _ in $(seq 1 30); do
+  actual="$(get /admin/server || true)"
+  [[ "$actual" == 200 ]] && break
+  sleep 1
+done
+assert_code 200 "$actual" 'New admin credential persists across restart'
+assert_code 401 "$(curl --noproxy '*' -ks --connect-timeout 3 -o "$RESP" -w '%{http_code}' -u 'admin:api-regression-test-password' "$URL/admin/server")" 'Old credential stays invalid after restart'
 
 # Initial Logs navigation MUST NOT parse malformed event data.
 docker exec -i "$NAME" sh -c 'cat > /data/logs/events.jsonl' <<'INVALID'
@@ -182,11 +208,16 @@ routes=(
  '/admin/owasp/custom/disable:wafctl.sh' '/admin/owasp/custom/enable:wafctl.sh'
  '/admin/owasp/custom/delete:wafctl.sh'
  '/admin/alerts/save:obsctl.sh' '/admin/alerts/delete:obsctl.sh'
- '/admin/collector/save:obsctl.sh' '/admin/server/save:serverctl.sh'
+ '/admin/collector/save:obsctl.sh' '/admin/server/save:serverctl.sh' '/admin/password/change:adminctl.sh'
  '/admin/config/save:sitectl.sh' '/admin/config/reset:sitectl.sh'
 )
 for pair in "${routes[@]}"; do
   endpoint="${pair%%:*}" backend="${pair##*:}"
+  # The password handler is tested through a real HTTP call above. It is a
+  # read-only bind-mount in source-overlay runs, so it is never overwritten.
+  if [[ "$endpoint" == /admin/password/change ]]; then
+    continue
+  fi
   n_before="$(docker exec "$NAME" sh -c 'wc -l </data/regression-dispatch.log' 2>/dev/null || echo 0)"
   must_redirect "$endpoint" -d 'host=example.test' -d 'id=test-id' -d 'rule_id=942100' -d 'pl=1' -d 'email=admin@example.org' -d 'plugin=example' -d 'file=plugin.conf'
   n_after="$(docker exec "$NAME" sh -c 'wc -l </data/regression-dispatch.log')"
