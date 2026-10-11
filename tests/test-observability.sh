@@ -29,6 +29,24 @@ HTTP
 cat > "$AUDIT_FILE" <<'AUDIT'
 {"transaction":{"client_ip":"1.2.3.4","unique_id":"tx-1","is_interrupted":true,"host_port":443,"request":{"hostname":"app.test","method":"POST","uri":"/api/blocked?secret=never-log","headers":{"Host":"app.test"},"port":443},"response":{"http_code":403},"intervention":{"disruptive":true},"messages":[{"message":"SQL injection attempt","details":{"ruleId":"942100","severity":"CRITICAL"}}]}}
 AUDIT
+# Redacted MCP paths must remain visible to 2xx status/host/port searches.
+cat >> "$EVENTS_FILE" <<HTTP
+{"type":"http","timestamp":"2026-10-09T00:00:00Z","epoch":$NOW,"host":"dev.test","route":"[redacted]","port":"443","method":"POST","status":200,"ip":"1.2.3.4","uri":"/mcp","action":"-"}
+HTTP
+[[ "$("$TMP/obsctl.sh" query http dev.test '' 443 POST 2xx '' 100 0 | wc -l)" == 1 ]]
+# The opt-in MCP access format must never interpolate opaque URL segments.
+python3 - "$ROOT/nginx/nginx.conf" <<'PY_TEST'
+from pathlib import Path
+import re, sys
+source = Path(sys.argv[1]).read_text()
+match = re.search(r'log_format liteedge_mcp_json escape=json\s+(.*?);', source, re.S)
+assert match, "Missing dedicated MCP log format"
+fmt = match.group(1)
+for unsafe in ("$request_uri", "$uri", "$liteedge_route", "$args"):
+    assert unsafe not in fmt, f"MCP logging leaks URL components: {unsafe}"
+for field in ('"uri":"/mcp"', '"route":"[redacted]"', '"status":$status', '"host":"$host"'):
+    assert field in fmt, f"Missing safe MCP event field: {field}"
+PY_TEST
 [[ "$("$TMP/obsctl.sh" query http app.test 'prefix:/api' 443 GET 2xx '' 100 0 | wc -l)" == 1 ]]
 [[ "$("$TMP/obsctl.sh" query http app.test 'prefix:/api' 443 POST 5xx '' 100 0 | wc -l)" == 1 ]]
 [[ "$("$TMP/obsctl.sh" query http '' '' '' '' '' error 100 0 | wc -l)" == 1 ]]
