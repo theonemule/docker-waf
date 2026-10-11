@@ -100,10 +100,12 @@ overview stays on the overview, and an individual site editor stays on that site
 ### Configure multiple backends and health checks
 
 Open **Sites → Manage → Routes → Configure** to edit a route in a modal
-(or **Add route** to create one). Keep the primary reverse-proxy target, add
-additional HTTP backend URLs if needed, and choose the balancing method,
-passive failure threshold and timeout. Each pool supports up to 16 backends
-with matching base paths. A single-backend route keeps its existing behavior.
+(or **Add route** to create one). All backend endpoints appear as individual
+URL rows within **Backend pool**. Click **Add backend** to insert another row
+or **Remove** beside any endpoint. There is no separate primary-target input
+or multi-line URL text box. Choose a load-balancing method, passive failure
+threshold and timeout. Pools support up to 16 endpoints with matching base
+paths, and single-backend routes keep their existing behavior.
 
 The same dialog offers an optional active HTTP health probe. Its defaults are
 a `/health` path, expected HTTP `200`, 30-second interval, 5-second

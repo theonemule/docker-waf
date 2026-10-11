@@ -1,3 +1,102 @@
+// Each route manages a single ordered set of backend URLs. The first stored
+// endpoint maps to TARGET and the remainder to BACKENDS for API compatibility;
+// there is no distinguished primary endpoint in the route editor.
+(() => {
+  const maxBackends = 16;
+  const findRows = (pool) => Array.from(pool.querySelectorAll("[data-backend-row]"));
+  const showPoolError = (pool, message) => {
+    const error = pool.querySelector("[data-backend-error]");
+    if (!error) return;
+    error.textContent = message;
+    error.hidden = !message;
+  };
+  const refreshPool = (pool) => {
+    const rows = findRows(pool);
+    rows.forEach((row, index) => {
+      const label = row.querySelector("[data-backend-label]");
+      const input = row.querySelector("[data-backend-url]");
+      if (label) label.textContent = "Backend " + (index + 1);
+      if (input) input.setAttribute("aria-label", "Backend " + (index + 1) + " URL");
+    });
+    const add = pool.querySelector("[data-backend-add]");
+    if (add) add.disabled = rows.length >= maxBackends;
+  };
+  const serializePool = (pool, validate = false) => {
+    const urls = findRows(pool).map((row) => (row.querySelector("[data-backend-url]")?.value || "").trim());
+    if (validate && (urls.length === 0 || urls.some((url) => !url))) {
+      showPoolError(pool, "Add at least one backend and enter a URL in every row.");
+      return false;
+    }
+    if (urls.length > maxBackends) {
+      showPoolError(pool, "A backend pool supports at most 16 endpoints.");
+      return false;
+    }
+    pool.querySelector('input[name="target"]').value = urls[0] || "";
+    pool.querySelector('input[name="backends"]').value = urls.slice(1).join(",");
+    showPoolError(pool, "");
+    return true;
+  };
+  const makeRow = () => {
+    const row = document.createElement("div");
+    row.className = "d-flex flex-wrap align-items-center gap-2 mb-2";
+    row.setAttribute("data-backend-row", "");
+    const label = document.createElement("span");
+    label.className = "small text-secondary";
+    label.setAttribute("data-backend-label", "");
+    const input = document.createElement("input");
+    input.type = "url";
+    input.required = true;
+    input.className = "form-control font-monospace flex-grow-1";
+    input.style.cssText = "min-width:220px;width:auto";
+    input.placeholder = "http://app:8080";
+    input.setAttribute("data-backend-url", "");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-sm btn-outline-danger";
+    remove.textContent = "Remove";
+    remove.setAttribute("data-backend-remove", "");
+    row.append(label, input, remove);
+    return row;
+  };
+  document.addEventListener("click", (event) => {
+    const add = event.target.closest("[data-backend-add]");
+    if (add) {
+      const pool = add.closest("[data-backend-pool]");
+      if (!pool) return;
+      if (findRows(pool).length >= maxBackends) return;
+      const row = makeRow();
+      pool.querySelector("[data-backend-list]").appendChild(row);
+      refreshPool(pool);
+      serializePool(pool);
+      row.querySelector("[data-backend-url]").focus();
+      return;
+    }
+    const remove = event.target.closest("[data-backend-remove]");
+    if (remove) {
+      const pool = remove.closest("[data-backend-pool]");
+      if (!pool) return;
+      remove.closest("[data-backend-row]")?.remove();
+      refreshPool(pool);
+      serializePool(pool);
+    }
+  });
+  document.addEventListener("input", (event) => {
+    const pool = event.target.closest("[data-backend-pool]");
+    if (pool && event.target.matches("[data-backend-url]")) serializePool(pool);
+  });
+  // Capture precedes the AJAX action handler, which snapshots new FormData().
+  // Prevent an invalid empty pool from posting any route changes.
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("form");
+    if (!form) return;
+    const pool = form.querySelector("[data-backend-pool]");
+    if (pool && !serializePool(pool, true)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+})();
+
 (() => {
   function showStatus(form, message, isError) {
     let status = form.querySelector(".upload-status");

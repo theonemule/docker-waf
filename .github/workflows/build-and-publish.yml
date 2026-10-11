@@ -47,6 +47,7 @@ jobs:
           bash tests/test-acme-crs-integration.sh
           bash tests/test-admin-password.sh
           bash tests/test-vm-iso.sh
+          node tests/test-backend-pool-ui.js
           node tests/test-ui-import.js
           node tests/test-logs-ui.js
           python3 tests/test-http-api-coverage.py

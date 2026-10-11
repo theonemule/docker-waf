@@ -203,6 +203,20 @@ route_id="$(docker exec "$NAME" sh -c 'for f in /data/sites/example.test.routes/
 [[ "$route_id" =~ ^[a-f0-9]{16}$ ]]
 must_redirect /admin/route/save -d "id=$route_id" -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:23456' -d 'timeout=70'
 docker exec "$NAME" sh -c 'grep -Rl "^TARGET=http://127.0.0.1:23456$" /data/sites/example.test.routes/*.route >/dev/null'
+# Pool endpoints are rendered as equal, removable URL rows in both add and
+# edit dialogs, regardless of the legacy TARGET/BACKENDS storage distinction.
+must_redirect /admin/route/save -d "id=$route_id" -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:23456' -d 'backends=http://127.0.0.1:23457,http://127.0.0.1:23458' -d 'timeout=70'
+docker exec "$NAME" sh -c 'grep -Rl "^BACKENDS=http://127.0.0.1:23457,http://127.0.0.1:23458$" /data/sites/example.test.routes/*.route >/dev/null'
+assert_code 200 "$(get '/admin/site?host=example.test')" 'Existing backend pool renders individual URL fields'
+assert_body 'data-backend-pool'
+assert_body 'data-backend-add'
+assert_body 'data-backend-remove'
+assert_body 'Backend 3'
+assert_body 'value="http://127.0.0.1:23457"'
+assert_body 'value="http://127.0.0.1:23458"'
+if grep -q 'Additional backend URLs (one per line)' "$RESP"; then
+  echo 'Deprecated backend textarea still shown' >&2; exit 1
+fi
 assert_code 200 "$(post /admin/route/add -d 'host=example.test' -d 'path=/bad/' -d 'target=file:///etc/passwd')" 'Reject unsafe upstream'
 assert_body 'Request failed'
 assert_code 200 "$(post /admin/site/save -d 'host=invalid/host')" 'Reject invalid hostname'

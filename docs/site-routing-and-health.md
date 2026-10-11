@@ -45,15 +45,25 @@ editable through **Advanced NGINX**, not the standard proxy-route dialog.
 
 ## Multiple backends and load balancing
 
-One backend works as before. To enable a pool, add extra backend URLs,
-one per line:
+Open the route's **Configure** dialog and use the **Backend pool**
+section. Each backend has its own URL input and **Remove** button. Click
+**Add backend** to insert another input. You can add or remove endpoints
+in any position; the pool requires at least one backend before saving.
+
+For example, enter these as three separate rows:
 
 ```text
-Primary target: http://app1:8080
-Additional backends:
-  http://app2:8080
-  http://app3:8080
+Backend 1   http://app1:8080       Remove
+Backend 2   http://app2:8080       Remove
+Backend 3   http://app3:8080       Remove
+
+[Add backend]
 ```
+
+Existing routes automatically populate these rows from their saved endpoints.
+For backwards compatibility the first row is stored as `TARGET` and the
+remaining rows as `BACKENDS`, but all endpoints are edited in exactly the
+same way. Removing the first row promotes the next one when saved.
 
 Pools accept up to **16** plain `http://` backends with matching optional
 base paths. The legacy single-backend route can still use its supported

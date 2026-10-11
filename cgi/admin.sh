@@ -295,6 +295,39 @@ HTML
   fi
 }
 
+backend_pool_fields() {
+  local primary="$1" extra="$2" url index=0
+  local -a urls=("$primary") extras=()
+  if [[ -n "$extra" ]]; then
+    IFS=',' read -r -a extras <<< "$extra"
+    urls+=("${extras[@]}")
+  fi
+  cat <<HTML
+<div data-backend-pool data-max-backends="16">
+  <input type="hidden" name="target" value="$(html_escape "$primary")">
+  <input type="hidden" name="backends" value="$(html_escape "$extra")">
+  <div class="mb-2 fw-semibold">Backend pool</div>
+  <div data-backend-list>
+HTML
+  for url in "${urls[@]}"; do
+    index=$((index+1))
+    cat <<HTML
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2" data-backend-row>
+      <span class="small text-secondary" data-backend-label>Backend $index</span>
+      <input class="form-control font-monospace flex-grow-1" style="min-width:220px;width:auto" type="url" data-backend-url value="$(html_escape "$url")" aria-label="Backend $index URL" placeholder="http://app:8080" required>
+      <button class="btn btn-sm btn-outline-danger" type="button" data-backend-remove>Remove</button>
+    </div>
+HTML
+  done
+  cat <<HTML
+  </div>
+  <button class="btn btn-sm btn-outline-primary" type="button" data-backend-add>Add backend</button>
+  <div class="small text-danger mt-2" role="alert" data-backend-error hidden></div>
+  <div class="form-text">Add or remove endpoints individually. A route needs at least one backend (up to 16). Multiple endpoints must use HTTP URLs with matching base paths.</div>
+</div>
+HTML
+}
+
 routes_panel() {
   local host="$1" dir route id match path target websocket timeout waf force_https default_timeout
   local waf_pl waf_plugins waf_disabled legacy_profile plugin_count default_pl
@@ -355,13 +388,11 @@ HTML
 <form method="post" action="/admin/route/save" class="mt-3"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix" $(selected "$match" prefix)>Prefix</option><option value="exact" $(selected "$match" exact)>Exact</option><option value="regex" $(selected "$match" regex)>Regex</option></select></div>
-<div class="col-md-3"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="$(html_escape "$path")" required></div>
-<div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" value="$(html_escape "$target")" required></div>
-<div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$timeout")" required></div>
+<div class="col-md-6"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="$(html_escape "$path")" required></div>
+<div class="col-md-4"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$timeout")" required></div>
 </div>
 <fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
-<label class="form-label">Additional backend URLs (one per line)</label><textarea class="form-control font-monospace" name="backends" rows="3" placeholder="http://backend2:8080">$(html_escape "$(tr ',' '\n' <<< "$backends" | sed '/^$/d')")</textarea>
-<div class="form-text">Primary target above plus these backends form one pool. Use HTTP endpoints with matching base paths. Open-source NGINX uses passive failure detection.</div>
+$(backend_pool_fields "$target" "$backends")
 <div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin" $(selected "$lb_mode" round_robin)>Round robin</option><option value="least_conn" $(selected "$lb_mode" least_conn)>Least connections</option><option value="ip_hash" $(selected "$lb_mode" ip_hash)>Client IP hash</option><option value="cookie" $(selected "$lb_mode" cookie)>Affinity cookie (HTTPS)</option></select></div>
 <div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="$(html_escape "$max_fails")"></div>
 <div class="col-md-4"><label class="form-label">Fail timeout (seconds)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="$(html_escape "$fail_timeout")"></div></div>
@@ -407,13 +438,11 @@ HTML
 <form method="post" action="/admin/route/add"><input type="hidden" name="host" value="$(html_escape "$host")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix">Prefix</option><option value="exact">Exact</option><option value="regex">Regex</option></select></div>
-<div class="col-md-3"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="/" required></div>
-<div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" placeholder="http://app:8080" required></div>
-<div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$default_timeout")" required></div>
+<div class="col-md-6"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="/" required></div>
+<div class="col-md-4"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$default_timeout")" required></div>
 </div>
 <fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
-<label class="form-label">Additional backend URLs (one per line)</label><textarea class="form-control font-monospace" name="backends" rows="3" placeholder="http://backend2:8080"></textarea>
-<div class="form-text">Primary target plus additional URLs form a pool. Backends must be HTTP endpoints with matching base paths.</div>
+$(backend_pool_fields "" "")
 <div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin">Round robin</option><option value="least_conn">Least connections</option><option value="ip_hash">Client IP hash</option><option value="cookie">Affinity cookie (HTTPS)</option></select></div><div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="3"></div><div class="col-md-4"><label class="form-label">Fail timeout (sec)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="30"></div></div></fieldset>
 <fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Active health probe</legend>
 <div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" name="health_enabled" value="1" id="new_health"><label class="form-check-label" for="new_health">Enable HTTP checks and health events</label></div>
