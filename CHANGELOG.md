@@ -1,3 +1,9 @@
+## October 11, 2026 — Full v3.1.1 artifact rebuild and release
+
+- Publish the complete source-based Alpine/musl appliance, offline VM and bare-metal ISOs, and runtime container from current `master`.
+- Restore the default-branch CI trigger, publish immutable `v3.1.1` and commit-SHA container tags, and upload all installer assets to GitHub Releases.
+- Includes the restored Logs multi-select SPA and automatic check-only OWASP CRS update detection.
+
 ## October 11, 2026 — SPA log selectors and CRS update checks
 
 - Restored searchable, multi-select hosts and aliases in the SPA Logs filters,
