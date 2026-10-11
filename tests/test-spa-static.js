@@ -30,6 +30,9 @@ for(const name of ["site/save","route/add","route/save","server/save","server/sm
 assert.match(spa,/data-log-host/);
 assert.match(spa,/data-log-route/);
 assert.match(spa,/data-log-picker-search/);
+assert.match(spa,/function closeOtherLogPickers\(target\)/);
+assert.match(spa,/picker!==activePicker/);
+assert.match(spa,/function closeLogPickersOnEscape\(event\)/);
 assert.match(spa,/scopes_json/);
 assert.match(spa,/checkCrsUpdates\(\)/);
 assert.match(spa,/api\("owasp\/crs\/check"\)/);

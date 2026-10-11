@@ -712,7 +712,16 @@
     const term=event.target.value.trim().toLowerCase();
     dialog.querySelectorAll("[data-rule-row]").forEach(row=>{row.hidden=!row.dataset.search.includes(term);});
   });
+  // Native <details> elements do not dismiss each other or close on outside
+  // clicks. Treat the host/route pickers as a single dropdown group.
+  function closeOtherLogPickers(target) {
+    const activePicker=target.closest?.("[data-log-picker]");
+    for(const picker of document.querySelectorAll("[data-log-picker][open]")){
+      if(picker!==activePicker) picker.open=false;
+    }
+  }
   document.addEventListener("click",async(event)=>{
+    closeOtherLogPickers(event.target);
     const clear=event.target.closest("[data-log-clear]");
     if(clear){
       const form=clear.closest("[data-log-search]");
@@ -733,6 +742,17 @@
       await command(el.dataset.operation,el);
     } catch(err){toast(err.message||String(err),"danger");}
   });
+  function closeLogPickersOnEscape(event) {
+    if(event.key!=="Escape")return;
+    const openPickers=[...document.querySelectorAll("[data-log-picker][open]")];
+    if(!openPickers.length)return;
+    // Return keyboard focus to the dropdown trigger after dismissal.
+    const active=event.target.closest?.("[data-log-picker]");
+    for(const picker of openPickers) picker.open=false;
+    (active||openPickers[openPickers.length-1]).querySelector("summary")?.focus();
+    event.preventDefault();
+  }
+  document.addEventListener("keydown",closeLogPickersOnEscape);
   document.addEventListener("submit",async(event)=>{
     const formEl=event.target;
     if(!formEl.matches("form"))return;

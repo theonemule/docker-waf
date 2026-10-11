@@ -1,3 +1,11 @@
+## October 11, 2026 — Logs dropdown dismissal fix
+
+- Close the Logs host/alias and route multi-select menus when clicking outside.
+- Opening one menu closes the other, preventing overlapping panels.
+- Escape closes the open menu and returns keyboard focus to its trigger.
+- Preserve selected host/route filters and maintain the SPA without page reloads.
+- Added behavior-level dropdown regression tests to CI and verified in Chrome.
+
 ## October 11, 2026 — Full v3.1.1 artifact rebuild and release
 
 - Publish the complete source-based Alpine/musl appliance, offline VM and bare-metal ISOs, and runtime container from current `master`.
