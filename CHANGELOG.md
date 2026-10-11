@@ -1,8 +1,39 @@
 # Changelog
 
+## Unreleased — SPA and authenticated JSON API (feature branch only)
+
+- Static Bootstrap SPA using hash-based navigation and JavaScript `fetch`
+  instead of HTML postbacks, document reloads or redirect-after-save.
+- Versioned `/api/v1` JSON read models and mutation endpoints for sites,
+  routes, WAF, alerts, logs and server settings, plus API upload/download.
+- NGINX Basic authentication on every request, browser-managed credentials,
+  additional same-origin/Fetch Metadata protection for API writes.
+- Compatibility redirects for legacy HTML bookmarks; isolated regression
+  tests can opt into old HTML views without changing production behavior.
+- Added client contract, authenticated HTTP API, import/export round-trip,
+  and browser no-document-reload verification.
+- **Not merged to `main` or deployed.**
+
 Significant LiteEdge changes, grouped by user-facing functionality. This
 update reviews the approximately 25 commits through October 10, 2026.
 See the Git history for individual implementation and corrective commits.
+
+## October 11, 2026 — Undeployed SPA/API refactor
+
+- **Single-page management UI.** Separates Bootstrap presentation into static
+  HTML and JavaScript; navigation, modal edits, and saves use authenticated
+  API fetch requests without reloading the document.
+- **JSON management contract.** Versioned /api/v1 read models, JSON mutation
+  responses and import feedback, binary downloads, and server-side validation.
+  Existing management scripts remain available for external compatibility.
+- **Security.** NGINX Basic authentication protects the SPA, assets, and every
+  API endpoint. Mutations require same-origin checks and a custom header.
+  Browser-managed credentials are never stored in application JavaScript.
+- **Verification.** Adds API, authentication, CSRF, import/export, no-postback,
+  and browser navigation tests to complement the existing 147 assertions.
+
+**Not deployed.** Work is isolated for review before a production rollout.
+See [SPA/API architecture](docs/spa-api.md).
 
 ## October 10, 2026 — Site and route operations
 

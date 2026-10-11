@@ -1586,6 +1586,7 @@ handle_post() {
       if ! output="$(printf '%s\n%s\n%s\n' "${PARAM[current_password]:-}" "${PARAM[new_password]:-}" "${PARAM[confirm_password]:-}" | /opt/liteedge/bin/adminctl.sh change-password 2>&1)"; then
         error_page "$output"
       fi
+      if [[ "${API_MODE:-0}" == 1 ]]; then api_success '{"ok":true,"reauthenticate":true}'; fi
       page_head "Password changed"
       cat <<'HTML'
 <div class="alert alert-success" role="status"><h1 class="h5">Administrator password updated</h1><p class="mb-0">The new password is active and saved. Open Server Settings again and authenticate with your new password.</p></div>
@@ -1629,6 +1630,38 @@ HTML
 
 path="${PATH_INFO:-/}"
 parse_params "${QUERY_STRING:-}"
+if [[ "$path" == /api/v1/* ]]; then
+  if [[ "${REQUEST_METHOD:-GET}" == POST && "$path" == /api/v1/actions/* ]]; then
+    length="${CONTENT_LENGTH:-0}"
+    if [[ "$length" =~ ^[0-9]+$ ]] && (( length > 0 )); then
+      body=""; IFS= read -r -N "$length" body || true; parse_params "$body"
+    fi
+  fi
+  # shellcheck disable=SC1091
+  source /opt/liteedge/cgi/api.sh
+  api_entry "$path"
+  exit 0
+fi
+
+# Old HTML bookmarks enter the SPA. Only the optional compatibility test mode
+# can reach the former server-rendered pages; the production UI never can.
+if [[ "${REQUEST_METHOD:-GET}" == GET && "${LITEEDGE_ALLOW_LEGACY_UI:-0}" != 1 ]]; then
+  case "$path" in
+    /admin/site)
+      host="${PARAM[host]:-}"
+      if [[ -n "$host" ]]; then
+        validate_host "$host" 2>/dev/null || error_page 'Invalid hostname.'
+        redirect "/#/site/$host"
+      fi
+      redirect '/#/sites'
+      ;;
+    /admin/owasp) redirect '/#/owasp' ;;
+    /admin/server|/admin/collector) redirect '/#/server' ;;
+    /admin/logs) redirect '/#/logs' ;;
+    /admin/alerts) redirect '/#/alerts' ;;
+    /admin|/admin/) redirect '/#/sites' ;;
+  esac
+fi
 
 if [[ "$path" == /admin/export ]]; then
   handle_export

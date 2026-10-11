@@ -19,7 +19,7 @@ cleanup() {
 }
 trap cleanup EXIT
 docker image inspect "$IMAGE" >/dev/null
-args=(run -d --name "$NAME" -e ADMIN_USER=admin -e "ADMIN_PASSWORD=$PASS" -e LITEEDGE_RESTART_POLICY=no -p 127.0.0.1::9443
+args=(run -d --name "$NAME" -e ADMIN_USER=admin -e "ADMIN_PASSWORD=$PASS" -e LITEEDGE_ALLOW_LEGACY_UI=1 -e LITEEDGE_RESTART_POLICY=no -p 127.0.0.1::9443
   -v "$TEMP/admin-no-rate.conf:/opt/liteedge/etc/nginx/admin.conf.template:ro")
 if [[ "${LITEEDGE_TEST_MOUNT_SOURCE:-0}" == 1 ]]; then
   args+=(-v "$ROOT/cgi/admin.sh:/opt/liteedge/cgi/admin.sh:ro"
@@ -40,7 +40,12 @@ done
 [[ "$ready" == 1 ]] || { docker logs "$NAME" | tail -50; echo 'Admin API did not become ready' >&2; exit 1; }
 
 
-get() { curl --noproxy '*' -ks --connect-timeout 3 --max-time 15 -u "admin:$PASS" -o "$RESP" -w '%{http_code}' "$URL$1"; }
+# Compatibility regression for legacy CGI HTML; SPA tests cover / and /api/v1.
+get() {
+  local path="$1"
+  [[ "$path" == / ]] && path=/admin/
+  curl --noproxy '*' -ks --connect-timeout 3 --max-time 15 -u "admin:$PASS" -o "$RESP" -w '%{http_code}' "$URL$path"
+}
 post() {
   local path="$1"; shift
   curl --noproxy '*' -ks --connect-timeout 3 --max-time 20 -u "admin:$PASS"     -X POST -D "$TEMP/post-headers" -o "$RESP" -w '%{http_code}' "$URL$path" "$@"
