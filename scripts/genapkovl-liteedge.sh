@@ -59,11 +59,29 @@ gzip
 findutils
 openssh
 PACKAGES
+# The VM image targets hypervisors, while bare metal installs the LTS kernel
+# and selected NIC firmware. Each installed target gets its own /etc/apk/world.
+case "${LITEEDGE_ISO_VARIANT:-vm}" in
+    vm) ;;
+    baremetal)
+        sed -i 's/^linux-virt$/linux-lts/' "$tmp/etc/apk/world"
+        cat >> "$tmp/etc/apk/world" <<'FIRMWARE'
+linux-firmware-intel
+linux-firmware-realtek
+linux-firmware-bnx2
+FIRMWARE
+        ;;
+    *) echo 'Unknown offline ISO variant' >&2; exit 1 ;;
+esac
 cp "$tarball" "$checksum" "$tmp/etc/liteedge-offline/"
 cp "$root/scripts/install-alpine.sh" "$tmp/etc/liteedge-offline/install-alpine.sh"
-cp "$root/scripts/vm-iso-install.sh" "$tmp/etc/liteedge-offline/vm-iso-install.sh"
+if [ "${LITEEDGE_ISO_VARIANT:-vm}" = baremetal ]; then
+    cp "$root/scripts/baremetal-iso-install.sh" "$tmp/etc/liteedge-offline/baremetal-iso-install.sh"
+else
+    cp "$root/scripts/vm-iso-install.sh" "$tmp/etc/liteedge-offline/vm-iso-install.sh"
+fi
 cp "$root/scripts/vm-firstboot.sh" "$tmp/etc/local.d/liteedge-firstboot.start"
-chmod 755 "$tmp/etc/local.d/liteedge-firstboot.start" "$tmp/etc/liteedge-offline/vm-iso-install.sh"
+chmod 755 "$tmp/etc/local.d/liteedge-firstboot.start" "$tmp/etc/liteedge-offline/"*iso-install.sh
 # Install standard Alpine live OpenRC services; preserve them on the target
 # when setup-disk saves the overlay. Enable LiteEdge only on installed root.
 for service in devfs dmesg mdev hwdrivers modloop; do
@@ -81,8 +99,12 @@ done
 ln -s /etc/init.d/local "$tmp/etc/runlevels/default/local"
 cat > "$tmp/etc/profile.d/liteedge-iso.sh" <<'PROFILE'
 # Present install guidance only on the live installer, not the installed system.
-if [ -r /etc/liteedge-offline/vm-iso-install.sh ] && [ ! -e /var/lib/liteedge/.vm-iso-installed ]; then
-    echo 'LiteEdge VM: run  sh /etc/liteedge-offline/vm-iso-install.sh'
+if [ ! -e /var/lib/liteedge/.vm-iso-installed ]; then
+    if [ -r /etc/liteedge-offline/baremetal-iso-install.sh ]; then
+        echo 'LiteEdge bare metal: sh /etc/liteedge-offline/baremetal-iso-install.sh'
+    elif [ -r /etc/liteedge-offline/vm-iso-install.sh ]; then
+        echo 'LiteEdge VM: sh /etc/liteedge-offline/vm-iso-install.sh'
+    fi
     echo 'No internet connection is required to install.'
 fi
 PROFILE

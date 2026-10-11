@@ -25,3 +25,30 @@ profile_liteedge() {
         tar gzip findutils"
     apkovl="genapkovl-liteedge.sh"
 }
+
+# Hardware profile. Keep the image small while shipping a real LTS kernel,
+# disk/USB/NVMe boot support, and the most common wired NIC firmware.
+profile_liteedge_baremetal() {
+    profile_base
+    image_name="liteedge-baremetal-installer"
+    profile_abbrev="ledgbm"
+    title="LiteEdge bare-metal installer"
+    desc="Minimal offline Alpine installation with the complete LiteEdge appliance"
+    arch="x86_64"
+    hostname="liteedge"
+    image_ext="iso"
+    output_format="iso"
+    kernel_flavors="lts"
+    kernel_addons=""
+    initfs_features="ata base cdrom ext4 mmc nvme raid scsi squashfs usb virtio"
+    apks="alpine-base alpine-conf alpine-keys openrc linux-lts
+        linux-firmware-intel linux-firmware-realtek linux-firmware-bnx2
+        grub-bios grub-efi efibootmgr syslinux
+        e2fsprogs dosfstools parted sfdisk util-linux
+        openssh dhcpcd bash ca-certificates curl openssl tzdata
+        fcgiwrap spawn-fcgi
+        pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb
+        coreutils diffutils patch lua5.3-libs jq socat logrotate libcap
+        tar gzip findutils"
+    apkovl="genapkovl-liteedge.sh"
+}

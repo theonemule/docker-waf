@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for file in scripts/install-alpine.sh scripts/build-vm-iso-inner.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh; do
+for file in scripts/install-alpine.sh scripts/build-vm-iso-inner.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
   sh -n "$ROOT/$file"
 done
 bash -n "$ROOT/scripts/build-vm-iso.sh"
+bash -n "$ROOT/scripts/build-baremetal-iso.sh"
 grep -Fq 'build-iso:' "$ROOT/.github/workflows/build-and-publish.yml"
 grep -Fq 'build-appliance, build-container, build-iso' "$ROOT/.github/workflows/build-and-publish.yml"
 grep -Fq 'lteedge' "$ROOT/scripts/mkimg.liteedge.sh" && { echo 'Typo in ISO profile' >&2; exit 1; } || true
@@ -22,4 +23,17 @@ grep -Fq '/local.d/liteedge-firstboot.start' "$ROOT/scripts/genapkovl-liteedge.s
 grep -Fq 'apk info -e' "$ROOT/scripts/install-alpine.sh"
 grep -Fq 'sha256sum -c' "$ROOT/scripts/build-vm-iso.sh"
 grep -Fq 'apk --no-network' "$ROOT/scripts/build-vm-iso-inner.sh"
-echo 'PASS offline VM ISO pipeline, BIOS/UEFI profile, dependency set and first-boot contracts'
+grep -Fq 'profile_liteedge_baremetal()' "$ROOT/scripts/mkimg.liteedge.sh"
+grep -Fq 'kernel_flavors="lts"' "$ROOT/scripts/mkimg.liteedge.sh"
+grep -Fq 'linux-firmware-intel' "$ROOT/scripts/mkimg.liteedge.sh"
+grep -Fq 'linux-firmware-realtek' "$ROOT/scripts/mkimg.liteedge.sh"
+grep -Fq 'linux-lts' "$ROOT/scripts/genapkovl-liteedge.sh"
+grep -Fq 'LITEEDGE_ISO_VARIANT=baremetal' "$ROOT/scripts/build-baremetal-iso.sh"
+grep -Fq 'apk --no-network' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq 'setup-alpine -f' "$ROOT/scripts/baremetal-iso-install.sh"
+grep -Fq 'Type ERASE' "$ROOT/scripts/baremetal-iso-install.sh"
+grep -Fq 'mounted partitions' "$ROOT/scripts/baremetal-iso-install.sh"
+grep -Fq 'offline Alpine' "$ROOT/scripts/baremetal-iso-install.sh"
+grep -Fq 'liteedge-baremetal-installer' "$ROOT/scripts/mkimg.liteedge.sh"
+grep -Fq 'Build minimal offline bare-metal installer ISO' "$ROOT/.github/workflows/build-and-publish.yml"
+echo 'PASS VM and bare-metal offline ISO profiles, install safety, BIOS/UEFI, dependency and first-boot contracts'

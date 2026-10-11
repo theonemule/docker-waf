@@ -1,3 +1,14 @@
+## October 11, 2026 — Offline bare-metal ISO and bundled release
+
+- Added a separate, **minimal x86-64 bare-metal ISO** with the Alpine LTS
+  kernel, basic hardware storage support and selected wired NIC firmware,
+  BIOS/UEFI boot, offline signed APK packages and the full LiteEdge runtime.
+- Added a dedicated installer with disk safety checks, interactive erase
+  confirmation, local-only APK repository and first-boot LiteEdge setup.
+- Extended CI to build, verify and publish **standalone binaries, the VM ISO
+  and the bare-metal ISO** as assets of the same `v3.1.0` GitHub release.
+- Preserved the existing VM ISO and Docker release pipelines.
+
 # Changelog
 
 ## Unreleased — SPA and authenticated JSON API (feature branch only)

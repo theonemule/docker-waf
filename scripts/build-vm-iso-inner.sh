@@ -11,6 +11,12 @@ cp /root/.abuild/*.rsa.pub /etc/apk/keys/
 PACKAGER_PRIVKEY="$(find /root/.abuild -maxdepth 1 -name '*.rsa' | head -n1)"
 export PACKAGER_PRIVKEY
 [ -s "$PACKAGER_PRIVKEY" ]
+variant="${LITEEDGE_ISO_VARIANT:-vm}"
+case "$variant" in
+  vm) profile=liteedge ;;
+  baremetal) profile=liteedge_baremetal ;;
+  *) echo 'Unknown ISO variant' >&2; exit 1 ;;
+esac
 out=/src/dist
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
@@ -26,21 +32,28 @@ cd "$work/aports/scripts"
     --outdir "$out" \
     --workdir "$work/build" \
     --arch x86_64 \
-    --profile liteedge \
+    --profile "$profile" \
     --repository "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" \
     --repository "https://dl-cdn.alpinelinux.org/alpine/v3.22/community"
-output="$out/liteedge-vm-installer-${VERSION}-x86_64.iso"
+output="$out/liteedge-${variant}-installer-${VERSION}-x86_64.iso"
 test -s "$output"
 (cd "$out" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
 # Verify native hybrid El Torito boot records (both BIOS and UEFI).
-xorriso -indev "$output" -report_el_torito plain 2>&1 | tee "$out/vm-iso-validation.log"
-grep -Eq 'BIOS|BIOS_boot' "$out/vm-iso-validation.log"
-grep -Eq 'UEFI|EFI' "$out/vm-iso-validation.log"
+xorriso -indev "$output" -report_el_torito plain 2>&1 | tee "$out/${variant}-iso-validation.log"
+grep -Eq 'BIOS|BIOS_boot' "$out/${variant}-iso-validation.log"
+grep -Eq 'UEFI|EFI' "$out/${variant}-iso-validation.log"
 # Verify the embedded offline payload is present on the finished medium.
 mkdir -p "$work/verify"
 xorriso -osirrox on -indev "$output" -extract /liteedge.apkovl.tar.gz "$work/verify/liteedge.apkovl.tar.gz" >/dev/null 2>&1
 tar -tzf "$work/verify/liteedge.apkovl.tar.gz" | grep -q 'etc/liteedge-offline/liteedge-linux-musl-x86_64.tar.gz'
 tar -tzf "$work/verify/liteedge.apkovl.tar.gz" | grep -q 'etc/local.d/liteedge-firstboot.start'
+if [ "$variant" = baremetal ]; then
+  tar -tzf "$work/verify/liteedge.apkovl.tar.gz" | grep -q 'etc/liteedge-offline/baremetal-iso-install.sh'
+  tar -xOzf "$work/verify/liteedge.apkovl.tar.gz" etc/apk/world | grep -qx 'linux-lts'
+  if tar -xOzf "$work/verify/liteedge.apkovl.tar.gz" etc/apk/world | grep -qx 'linux-virt'; then
+    echo 'Bare-metal target incorrectly selects the VM kernel.' >&2; exit 1
+  fi
+fi
 # Prove the complete on-media dependency closure can be resolved and fetched
 # with zero network. This also verifies the locally signed repository index.
 xorriso -osirrox on -indev "$output" -extract /apks "$work/verify/apks" >/dev/null 2>&1
@@ -51,4 +64,4 @@ apk --no-network --repositories-file /dev/null --repository "$work/verify/apks" 
     fetch --recursive --output "$work/verify/offline-fetch" $world >/dev/null
 count="$(find "$work/verify/offline-fetch" -name '*.apk' | wc -l)"
 [ "$count" -ge 100 ] || { echo 'Offline APK dependency verification incomplete' >&2; exit 1; }
-echo "PASS: ISO has BIOS/UEFI boot, signed offline APKs ($count resolved), and embedded LiteEdge"
+echo "PASS: $variant ISO has BIOS/UEFI boot, signed offline APKs ($count resolved), and embedded LiteEdge"

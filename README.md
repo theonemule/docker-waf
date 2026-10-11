@@ -22,6 +22,8 @@ without review and testing.**
 Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
 multi-backend sites and alerting on health checks, see
 [Site routing and health operations](docs/site-routing-and-health.md).
+
+For offline physical-server installation, see the [minimal bare-metal ISO guide](docs/bare-metal-installer.md). The release includes full binaries plus separate bootable VM and bare-metal ISOs.
 The undeployed SPA/API refactor is documented in [SPA and API architecture](docs/spa-api.md).
 
 The distributable product is a pre-built Alpine/musl release bundle. The same
@@ -133,6 +135,8 @@ can notify on recovery.
 upstream rotation.** Passive NGINX `max_fails` and `fail_timeout` settings
 handle request-time failure exclusion. This distinction is documented in
 [Site routing and health operations](docs/site-routing-and-health.md).
+
+For offline physical-server installation, see the [minimal bare-metal ISO guide](docs/bare-metal-installer.md). The release includes full binaries plus separate bootable VM and bare-metal ISOs.
 
 ## Docker install
 

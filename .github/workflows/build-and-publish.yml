@@ -70,6 +70,8 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
             version="${GITHUB_REF_NAME#v}"
+          elif [[ "$GITHUB_REF" == refs/heads/main && "${{ contains(github.event.head_commit.message, '[publish-release v3.1.0]') }}" == true ]]; then
+            version="3.1.0"
           else
             version="3.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
@@ -122,6 +124,23 @@ jobs:
           set -euo pipefail
           ./scripts/build-vm-iso.sh "${{ needs.build-appliance.outputs.version }}"
           (cd dist && sha256sum -c "liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256")
+
+      - name: Build minimal offline bare-metal installer ISO
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./scripts/build-baremetal-iso.sh "${{ needs.build-appliance.outputs.version }}"
+          (cd dist && sha256sum -c "liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256")
+
+      - name: Upload bootable bare-metal installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
+          path: |
+            dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso
+            dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload bootable VM installer artifacts
         uses: actions/upload-artifact@v4
@@ -212,7 +231,7 @@ jobs:
           docker push "${IMAGE_NAME}:v3"
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v3.')
+    if: startsWith(github.ref, 'refs/tags/v3.') || (github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-release v3.1.0]'))
     needs: [build-appliance, build-container, build-iso]
     runs-on: ubuntu-latest
     permissions:
@@ -230,13 +249,26 @@ jobs:
           name: docker-waf-vm-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
+      - name: Download bare-metal installer ISO
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
+          path: dist
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          tag="${GITHUB_REF_NAME}"
+          if [[ "$GITHUB_REF" == refs/heads/main ]]; then tag=v3.1.0; fi
+          (cd dist && sha256sum -c *.sha256)
+          test -s "dist/liteedge-linux-musl-x86_64.tar.gz"
+          test -s "dist/liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
+          test -s "dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
+          gh release create "$tag" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "Docker WAF ${GITHUB_REF_NAME}" \
+            --target "$GITHUB_SHA" \
+            --title "LiteEdge $tag — binaries, VM and bare-metal installers" \
             --generate-notes
