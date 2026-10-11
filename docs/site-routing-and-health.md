@@ -134,6 +134,10 @@ endpoints after qualifying request-time failures. An outage may therefore
 produce errors until passive failover occurs. This is not NGINX Plus
 active health checking.
 
+## Log Export in Server Settings
+
+Use **Server Settings → Log Export** to configure RFC 5424 syslog or HTTPS event collection. It has its own Save button and does not modify SMTP email configuration. The previous `/admin/collector` address and its save endpoint remain compatible, redirecting to this section. **Server Settings** is last in the navigation menu.
+
 ## Log filtering and retained settings
 
 Opening Logs does not query events automatically. Apply at least one filter

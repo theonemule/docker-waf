@@ -74,7 +74,7 @@ assert_redirect_location() {
 # Security / auth / method contracts.
 assert_code 401 "$(curl --noproxy '*' -ks -o "$RESP" -w '%{http_code}' "$URL/admin/logs")" 'Unauthenticated logs'
 assert_code 401 "$(curl --noproxy '*' -ks -X POST -d 'host=x.test' -o "$RESP" -w '%{http_code}' "$URL/admin/site/save")" 'Unauthenticated mutation'
-for path in / /admin/site?host=missing.test /admin/owasp /admin/server /admin/logs /admin/alerts /admin/collector; do
+for path in / /admin/site?host=missing.test /admin/owasp /admin/server /admin/logs /admin/alerts; do
   assert_code 200 "$(get "$path")" "GET $path"
 done
 assert_code 200 "$(get /admin/not-an-endpoint)" 'Unknown endpoint response'
@@ -84,9 +84,34 @@ assert_body 'Administrator password'
 assert_body 'action="/admin/password/change"'
 assert_body 'action="/admin/server/smtp/save"'
 assert_body 'SMTP email for alerts'
-assert_code 200 "$(get /admin/collector)" 'Collector form displays SMTP navigation'
-assert_body 'Server Settings'
-if grep -Fq 'name="smtp_password"' "$RESP"; then echo 'SMTP fields still on collector page' >&2; exit 1; fi
+assert_body 'id="log-export"'
+assert_body 'action="/admin/collector/save"'
+assert_body 'Save export configuration'
+# Server Settings is the last navigation item, with no separate Log Export item.
+python3 - "$RESP" <<'PY_HTML'
+from html.parser import HTMLParser
+from pathlib import Path
+import sys
+class Check(HTMLParser):
+    def __init__(self):
+        super().__init__();self.nav=False;self.items=[];self.forms=0;self.nested=False
+    def handle_starttag(self, tag, attrs):
+        a=dict(attrs)
+        if tag=='nav' and a.get('class','').startswith('nav nav-pills'): self.nav=True
+        if tag=='a' and self.nav: self.items.append(a.get('href'))
+        if tag=='form':
+            if self.forms: self.nested=True
+            self.forms+=1
+    def handle_endtag(self,tag):
+        if tag=='nav': self.nav=False
+        if tag=='form': self.forms-=1
+parser=Check();parser.feed(Path(sys.argv[1]).read_text())
+assert parser.items==['/','/admin/owasp','/admin/logs','/admin/alerts','/admin/server'], parser.items
+assert not parser.nested and parser.forms==0, 'Nested or unclosed form on Server Settings'
+PY_HTML
+assert_code 303 "$(get /admin/collector)" 'Legacy Log Export redirects to Server Settings'
+assert_code 200 "$(get /admin/server)" 'SMTP and export settings share Server Settings'
+assert_body 'name="smtp_password"'
 # First test the actual backend: a wrong current credential leaves the old
 # Basic Auth credential operational; a valid change immediately rejects it.
 assert_code 200 "$(post /admin/password/change -d 'current_password=invalid-value' -d 'new_password=example-updated-credential' -d 'confirm_password=example-updated-credential')" 'Reject wrong current password'
@@ -191,6 +216,7 @@ docker exec "$NAME" jq -e '.[] | select(.id=="test-api-alert")' /data/observabil
 must_redirect /admin/alerts/delete -d 'id=test-api-alert'
 docker exec "$NAME" jq -e 'length==0' /data/observability/alerts.json >/dev/null
 must_redirect /admin/collector/save -d 'mode=off' -d 'protocol=udp' -d 'port=514' -d 'provider=generic'
+assert_redirect_location '/admin/server#log-export'
 docker exec "$NAME" jq -e '.mode=="off"' /data/observability/collector.json >/dev/null
 must_redirect /admin/server/smtp/save -d 'smtp_host=smtp.example.org' -d 'smtp_port=587' -d 'smtp_user=alerts@example.org' -d 'smtp_password=integration-secret' -d 'mail_from=notices@example.org'
 docker exec "$NAME" jq -e '.smtp_host=="smtp.example.org" and .smtp_password=="integration-secret"' /data/observability/collector.json >/dev/null

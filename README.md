@@ -335,13 +335,16 @@ under `/data/observability/health`. Probe transitions are logged in
 `/data/logs/events.jsonl`; worker diagnostics go to
 `/data/logs/health-worker.log`.
 
-The **Log Export** page configures one external sink, either RFC 5424 syslog
+**Server Settings → Log Export** configures one external sink, either RFC 5424 syslog
 (UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
 Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP for email
 alerts separately in **Server Settings → SMTP email for alerts**. Set an SMTP
 hostname, STARTTLS port (default 587), sender address, optional username,
 and password, then save. The SMTP form preserves an existing password when left
 blank; saving log export configuration cannot clear the SMTP setup.
+Log Export has its own Save button on Server Settings. The old
+`/admin/collector` URL redirects to that section, and saving export settings
+returns to it. Server Settings appears last in the sidebar.
 Tokens and SMTP passwords are stored in mode 0600 files
 under `/data/observability` and never displayed in the form after saving.
 Events live under `/data/logs/events.jsonl`; ModSecurity source audit logs are
