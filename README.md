@@ -8,6 +8,10 @@ control plane.
 
 The original v1/v2 repository is preserved unchanged on the `legacy-v1-v2` branch.
 
+Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
+multi-backend sites and alerting on health checks, see
+[Site routing and health operations](docs/site-routing-and-health.md).
+
 The distributable product is a pre-built Alpine/musl release bundle. The same
 bundle is consumed by both the hardened Docker image and the standalone Alpine
 installer. Production deployments do not need a compiler toolchain.
@@ -53,6 +57,15 @@ Each virtual host defines its host name and aliases, while reverse-proxy behavio
 owned by its routes. Routes support prefix, exact, and regex matches, separate upstream
 URLs, WebSocket upgrades, timeouts, and HTTP-to-HTTPS redirection.
 
+Each site can be temporarily **disabled and re-enabled** without deleting its routes,
+certificates, or settings. Route creation and editing use dialogs instead of large
+inline editors. A route can use a single backend or an NGINX upstream pool with
+round-robin, least-connections, client-IP hashing, or cookie-based affinity.
+Optional HTTP health probes emit backend-down/recovered events for Logs and Alerts.
+Active probes **monitor and notify**, while open-source NGINX performs **passive**
+upstream failure handling. See [Site routing and health operations](docs/site-routing-and-health.md)
+for configuration, defaults, alert recipes, and limitations.
+
 OWASP CRS policy is route-scoped. Each route can enable or disable the WAF, select
 PL1 through PL4, select installed CRS plugins and application rule-exclusion plugins,
 and maintain route-only disabled rule IDs. The OWASP page manages application profiles
@@ -72,6 +85,37 @@ Each host supports three certificate modes:
 
 Let's Encrypt certificates are checked twice daily by a small shell renewal loop.
 No cron daemon or systemd is required inside the container.
+
+### Temporarily disable a site
+
+Open **Sites** and select **Disable** next to a hostname, or use **Manage →
+Disable site**. The site stays in the inventory, its routes and TLS certificates are
+retained, and requests receive HTTP 503. The button then changes to **Enable**;
+select it to restore the saved routing configuration. Disabling also affects the
+site's HTTP-01 challenge paths, so re-enable the site before renewing its TLS
+certificate. Newly created and existing sites are enabled by default.
+
+### Configure multiple backends and health checks
+
+Open **Sites → Manage → Routes → Configure** to edit a route in a modal
+(or **Add route** to create one). Keep the primary reverse-proxy target, add
+additional HTTP backend URLs if needed, and choose the balancing method,
+passive failure threshold and timeout. Each pool supports up to 16 backends
+with matching base paths. A single-backend route keeps its existing behavior.
+
+The same dialog offers an optional active HTTP health probe. Its defaults are
+a `/health` path, expected HTTP `200`, 30-second interval, 5-second
+request timeout, three consecutive failures to declare down, two successes
+to declare recovered, and a 300-second notification cooldown. Checks are
+off by default. The worker records changes as `health` events; configure
+a **Backend health** alert with action **Backend down**, threshold 1, and
+a notification destination to receive an outage alert. Action **Recovered**
+can notify on recovery.
+
+**Active probe results do not automatically remove endpoints from NGINX's
+upstream rotation.** Passive NGINX `max_fails` and `fail_timeout` settings
+handle request-time failure exclusion. This distinction is documented in
+[Site routing and health operations](docs/site-routing-and-health.md).
 
 ## Docker install
 
@@ -159,8 +203,9 @@ In Docker, persistent state is under the ./data bind mount:
       sites/      host and route definitions
       certs/      active host certificates
       acme/       ACME account, challenges, and issued certificates
-      logs/       certificate renewal logs
-      nginx/      generated runtime NGINX configuration
+      logs/       access events, WAF audit, probe/worker and certificate renewal logs
+      observability/ alert rules, sink settings, cursors and probe health state
+      nginx/      generated runtime NGINX configuration and upstream pools
       waf/        CRS defaults, registry cache, plugins, and custom rules
       www/        local static site content
 
@@ -179,6 +224,9 @@ The UI calls the same scripts that can be used manually inside the container:
 
     /opt/liteedge/bin/sitectl.sh route-add \
       app.example.com prefix /socket/ http://socket:9000 1
+
+    /opt/liteedge/bin/sitectl.sh disable app.example.com
+    /opt/liteedge/bin/sitectl.sh enable app.example.com
 
     /opt/liteedge/bin/certctl.sh selfsigned app.example.com
     /opt/liteedge/bin/certctl.sh letsencrypt app.example.com
@@ -264,9 +312,9 @@ Tags matching `v3.*` publish the matching immutable container tag and attach the
 standalone appliance bundle and installers to a GitHub Release.
 ## Logs, alert rules and collection
 
-The **Logs** page combines structured NGINX access events and normalized ModSecurity
-rule matches. Events include timestamp, hostname, route match/pattern, external
-listener port, internal listener and upstream address (including backend port),
+The **Logs** page combines structured NGINX access events, normalized ModSecurity
+rule matches, and optional health probe state-change events. Events include
+timestamp, hostname, route match/pattern, external listener port, internal listener and upstream address (including backend port),
 HTTP method/status, path, client IP, request ID and WAF rule/message/disposition.
 Filter by hostname, route, method, HTTP status or status class (2xx–5xx), port,
 free-text, and Unix timestamp. Download up to 1,000 filtered events as JSONL or
@@ -274,12 +322,16 @@ CSV; the view also searches up to seven compressed rotated log archives.
 Only the URI path is collected from NGINX; query strings, request/response bodies,
 credentials and cookies are not copied into centralized JSON event logs.
 
-The **Alerts** page defines conditions over HTTP/WAF events with event-count
-thresholds, rolling windows and cooldown periods. Each rule delivers to an HTTPS
-webhook or SMTP email. WAF prevention is done by the OWASP CRS intervention engine,
+The **Alerts** page defines conditions over HTTP, WAF, and backend-health events
+with event-count thresholds, rolling windows and cooldown periods. Each rule
+delivers to an HTTPS webhook or SMTP email. WAF prevention is done by the OWASP CRS intervention engine,
 not by ad-hoc alert scripts. Rule matches and blocked decisions appear in the Logs
 screen. The exporter/notification worker runs independently of NGINX so a failed
-collector doesn't interrupt the reverse proxy.
+collector doesn't interrupt the reverse proxy. Health probes run in a
+separate Bash worker (`health-worker.sh`), and store failure/recovery state
+under `/data/observability/health`. Probe transitions are logged in
+`/data/logs/events.jsonl`; worker diagnostics go to
+`/data/logs/health-worker.log`.
 
 The **Log Export** page configures one external sink, either RFC 5424 syslog
 (UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
@@ -324,8 +376,11 @@ all its requests. Matching uses actual request hostnames and either NGINX route
 labels or request URI prefix/exact/regex matches for imported routes.
 
 Filters persist across submissions and are applied server-side to the Logs
-screen, CSV downloads and JSONL downloads. The backend validates requested
-host/route combinations against the current inventory. Older host/route query
+screen, CSV downloads and JSONL downloads. The search-text field starts empty
+rather than showing a literal template variable; the browser saves filter
+values and selected hosts/routes within the current tab session, while
+explicit submitted URL parameters take precedence. The backend validates
+requested host/route combinations against the current inventory. Older host/route query
 parameters still work for bookmarked URLs. Run `bash tests/test-log-selectors.sh`
 for multi-site, aliases, WAF events, status classes and tampered-filter cases.
 
@@ -390,7 +445,7 @@ custom variables.
 CI runs fast backend validation and test fixtures, then builds the appliance
 and executes **the management HTTP regression suite against a disposable,
 authenticated Docker container** before publishing the image. Tests exercise
-all 31 current management POST actions (using isolated mocked backends for
+all 34 current management POST actions (using isolated mocked backends for
 network/destructive actions), real site/route CRUD, server settings, alerts,
 collector configuration, certificate-contact validation, authentication,
 unsafe-input rejection, raw import/export method restrictions, filterable HTTP
@@ -400,6 +455,7 @@ POST handler is added or removed without updating the HTTP regression matrix.
 Run locally with a built container image:
 
 ```bash
+bash tests/test-lb-health.sh
 bash tests/test-http-api-regression.sh ghcr.io/theonemule/docker-waf:latest
 python3 tests/test-http-api-coverage.py
 node tests/test-logs-ui.js
@@ -419,6 +475,17 @@ event type, status, method, port, timestamp or text filter and then click
 results/empty states render after it completes. Blank queries, including blank
 CSV/JSONL exports, are rejected. Search state and selected hosts/routes are
 retained across filter submissions and browser Back navigation.
+
+### Redacted access logging for private MCP paths
+
+Imported or manually customized MCP routes sometimes include an opaque
+authorization value in their URL path. An opt-in NGINX access format,
+`liteedge_mcp_json`, allows those locations to record status, method, host,
+timing and upstream outcome while replacing the route label with
+`[redacted]` and the URI with `/mcp`. This is **not** automatic for every
+route: the sensitive location must explicitly use the redacted log format.
+Avoid putting private URL paths or credentials into ordinary access logs.
+See [Site routing and health operations](docs/site-routing-and-health.md#privacy-and-sensitive-mcp-routes).
 
 ### Change administrator password
 
