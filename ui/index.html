@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LiteEdge</title>
+  <link rel="stylesheet" href="/assets/bootstrap.min.css">
+  <link rel="stylesheet" href="/assets/admin.css">
+  <link rel="stylesheet" href="/assets/spa.css">
+  <script src="/assets/spa.js" defer></script>
+</head>
+<body class="bg-body-tertiary">
+<nav class="navbar bg-dark navbar-dark"><div class="container-fluid px-4">
+  <a class="navbar-brand fw-semibold" href="#/sites">LiteEdge</a>
+  <span class="navbar-text">Lightweight NGINX control plane</span>
+</div></nav>
+<div class="container-fluid"><div class="row">
+<aside class="col-md-3 col-lg-2 bg-body border-end p-3 sidebar-nav">
+<nav class="nav nav-pills flex-column gap-1" aria-label="Main navigation">
+<a class="nav-link" href="#/sites" data-nav>Sites</a>
+<a class="nav-link" href="#/owasp" data-nav>OWASP</a>
+<a class="nav-link" href="#/logs" data-nav>Logs</a>
+<a class="nav-link" href="#/alerts" data-nav>Alerts</a>
+<a class="nav-link" href="#/server" data-nav>Server Settings</a>
+</nav></aside>
+<main class="col-md-9 col-lg-10 px-md-4 py-4" id="spa-root" aria-live="polite">
+<div class="d-flex gap-2 align-items-center text-secondary"><div class="spinner-border spinner-border-sm"></div>Loading LiteEdge…</div>
+</main></div></div>
+<div id="spa-feedback" role="status" aria-live="polite"></div>
+<dialog id="spa-dialog" class="liteedge-dialog liteedge-dialog-lg" aria-label="Editor"></dialog>
+</body></html>

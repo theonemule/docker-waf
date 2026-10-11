@@ -48,6 +48,7 @@ jobs:
           bash tests/test-admin-password.sh
           bash tests/test-vm-iso.sh
           node tests/test-backend-pool-ui.js
+          node tests/test-spa-static.js
           node tests/test-ui-import.js
           node tests/test-logs-ui.js
           python3 tests/test-http-api-coverage.py
@@ -182,6 +183,7 @@ jobs:
         run: |
           set -euo pipefail
           bash tests/test-http-api-regression.sh "${IMAGE_NAME}:ci"
+          bash tests/test-spa-api.sh "${IMAGE_NAME}:ci"
 
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'

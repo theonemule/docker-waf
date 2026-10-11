@@ -1,0 +1,10 @@
+#spa-root { min-height: calc(100vh - 6rem); }
+#spa-feedback {position:fixed;top:4.5rem;right:1rem;z-index:1300;max-width:min(520px,calc(100vw - 2rem));}
+#spa-dialog {width:min(1100px,calc(100vw - 2rem));max-height:92vh;overflow:auto;padding:0;border:0;border-radius:.5rem;}
+#spa-dialog::backdrop {background:rgba(0,0,0,.4);}
+.spa-backend-row {display:flex;gap:.5rem;align-items:center;margin-bottom:.5rem;}
+.spa-backend-row input {min-width:100px;flex:1;}
+.spa-form-grid {display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:1rem;}
+.spa-code {font-family:monospace;white-space:pre-wrap;overflow-wrap:anywhere;}
+.spa-check {display:flex;gap:.6rem;align-items:center;margin:.3rem 0;}
+.spa-input-error {font-size:.85rem;color:#b42318;}

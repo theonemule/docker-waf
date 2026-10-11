@@ -3,14 +3,26 @@
 Docker WAF v3 is the appliance generation of the original `theonemule/docker-waf`
 project. The appliance is named LiteEdge and is a lightweight reverse proxy and web
 application firewall built around NGINX, ModSecurity, and the OWASP Core Rule Set.
-It replaces the fixed demo proxy with a Bootstrap management UI and shell-only
-control plane.
+It replaces the fixed demo proxy with a JavaScript single-page management UI,
+versioned JSON API, and shell-based control plane.
 
 The original v1/v2 repository is preserved unchanged on the `legacy-v1-v2` branch.
+
+### SPA and versioned JSON API (feature branch, not deployed)
+
+A work-in-progress branch replaces the management-page postbacks and full-page
+reloads with a static single-page interface and a versioned, HTTP Basic
+protected JSON API. The UI uses authenticated JavaScript `fetch` calls for
+reads, mutations, imports and exports, and hash routing for in-page navigation.
+It preserves the existing Bash configuration backend and legacy command/API
+compatibility. See [SPA/API architecture and verification](docs/spa-api.md).
+**This refactor is not installed on production and must not be released
+without review and testing.**
 
 Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
 multi-backend sites and alerting on health checks, see
 [Site routing and health operations](docs/site-routing-and-health.md).
+The undeployed SPA/API refactor is documented in [SPA and API architecture](docs/spa-api.md).
 
 The distributable product is a pre-built Alpine/musl release bundle. The same
 bundle is consumed by both the hardened Docker image and the standalone Alpine
@@ -37,7 +49,8 @@ Each release asset contains the complete LiteEdge runtime under /opt/liteedge:
 - OWASP Core Rule Set
 - dehydrated ACME client
 - LiteEdge shell control/API scripts
-- CGI management UI
+- Versioned JSON management API exposed through CGI
+- Static single-page management interface (HTML, JavaScript, and Bootstrap)
 - Bootstrap assets
 - NGINX and ModSecurity templates
 - OpenRC service definition
@@ -237,7 +250,11 @@ The UI calls the same scripts that can be used manually inside the container:
 
 ## Security model
 
-The management UI is protected by Basic Auth on a separate HTTPS listener.
+The management UI and all versioned API endpoints are protected by Basic Auth
+on a separate HTTPS listener. Client-side navigation stays within the same
+page and uses authenticated JSON API requests rather than form postbacks.
+Administrators' Basic credentials remain browser-managed, not JavaScript-stored.
+Mutation APIs require an explicit custom header and same-origin browser context.
 Unknown public HTTP hostnames receive 404 and unknown public HTTPS SNI is rejected.
 The browser-side UI doesn't depend on inline styles or inline scripts. The UI uses no
 client-side application framework and loads its Bootstrap stylesheet locally.
