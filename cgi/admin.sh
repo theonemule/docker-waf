@@ -969,13 +969,14 @@ HTML
 }
 
 server_page() {
-  local worker keepalive header body send route resolver
+  local worker keepalive header body send route resolver smtp_config
   worker="$(server_setting_get WORKER_CONNECTIONS 1024)"; keepalive="$(server_setting_get KEEPALIVE_TIMEOUT 65)"
   header="$(server_setting_get CLIENT_HEADER_TIMEOUT 15)"; body="$(server_setting_get CLIENT_BODY_TIMEOUT 15)"
   send="$(server_setting_get SEND_TIMEOUT 30)"; route="$(server_setting_get DEFAULT_ROUTE_TIMEOUT 60)"; resolver="$(server_setting_get RESOLVER "")"
+  smtp_config="$(/opt/liteedge/bin/obsctl.sh collector)"
   page_head "Server Settings"
   cat <<HTML
-<div class="mb-4"><h1 class="h3 mb-1">Server Settings</h1><p class="text-secondary mb-0">Global NGINX runtime defaults.</p></div>
+<div class="mb-4"><h1 class="h3 mb-1">Server Settings</h1><p class="text-secondary mb-0">NGINX defaults, SMTP notification delivery, and administrator access.</p></div>
 <form method="post" action="/admin/server/save" class="card shadow-sm"><div class="card-header"><strong>NGINX defaults</strong></div><div class="card-body"><div class="row g-3">
 <div class="col-md-4"><label class="form-label">Worker connections</label><input class="form-control" type="number" name="worker_connections" value="$(html_escape "$worker")" required></div>
 <div class="col-md-4"><label class="form-label">Keepalive timeout</label><input class="form-control" type="number" name="keepalive_timeout" value="$(html_escape "$keepalive")" required></div>
@@ -985,6 +986,22 @@ server_page() {
 <div class="col-md-4"><label class="form-label">Send timeout</label><input class="form-control" type="number" name="send_timeout" value="$(html_escape "$send")" required></div>
 <div class="col-md-6"><label class="form-label">DNS resolver</label><input class="form-control font-monospace" name="resolver" value="$(html_escape "$resolver")" placeholder="Automatic from /etc/resolv.conf"><div class="form-text">Leave blank for automatic detection.</div></div>
 </div></div><div class="card-footer text-end"><button class="btn btn-primary">Save server settings</button></div></form>
+<section class="card shadow-sm mt-4" aria-labelledby="smtpHeading">
+  <div class="card-header"><strong id="smtpHeading">SMTP email for alerts</strong></div>
+  <form method="post" action="/admin/server/smtp/save">
+    <div class="card-body">
+      <p class="text-secondary">Configure email alerts independently of log export. Outgoing SMTP uses STARTTLS with server certificate verification.</p>
+      <div class="row g-3">
+        <div class="col-md-6"><label class="form-label" for="smtp_host">SMTP host</label><input class="form-control" id="smtp_host" name="smtp_host" value="$(html_escape "$(jq -r '.smtp_host // ""' <<< "$smtp_config")")" placeholder="smtp.example.com" autocomplete="off"></div>
+        <div class="col-md-2"><label class="form-label" for="smtp_port">STARTTLS port</label><input class="form-control" id="smtp_port" type="number" name="smtp_port" min="1" max="65535" value="$(html_escape "$(jq -r '.smtp_port // 587' <<< "$smtp_config")")" required></div>
+        <div class="col-md-4"><label class="form-label" for="mail_from">From address</label><input class="form-control" id="mail_from" name="mail_from" type="email" value="$(html_escape "$(jq -r '.mail_from // ""' <<< "$smtp_config")")" placeholder="alerts@example.com"></div>
+        <div class="col-md-6"><label class="form-label" for="smtp_user">SMTP username</label><input class="form-control" id="smtp_user" name="smtp_user" value="$(html_escape "$(jq -r '.smtp_user // ""' <<< "$smtp_config")")" autocomplete="off"></div>
+        <div class="col-md-6"><label class="form-label" for="smtp_password">SMTP password</label><input class="form-control" type="password" id="smtp_password" name="smtp_password" autocomplete="new-password" placeholder="Leave blank to keep existing password"><div class="form-text">Saved passwords are never returned to this page.</div></div>
+      </div>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2"><small class="text-secondary">Use an email destination on the <a href="/admin/alerts">Alerts</a> page to receive notifications.</small><button class="btn btn-primary" type="submit">Save SMTP settings</button></div>
+  </form>
+</section>
 <section class="card shadow-sm mt-4" aria-labelledby="passwordHeading">
   <div class="card-header"><strong id="passwordHeading">Administrator password</strong></div>
   <form method="post" action="/admin/password/change" data-native-submit>
@@ -1353,7 +1370,7 @@ collector_page() {
   mode="$(jq -r '.mode // "off"' <<< "$config")"
   page_head "Log Export"
   cat <<HTML
-<h1 class="h3">Log export and SMTP</h1><p class="text-secondary">Forward structured JSON events to syslog or an HTTPS collector. Splunk HEC, Datadog Logs and Elasticsearch Bulk formats are supported. Local logging continues if the remote collector fails.</p>
+<h1 class="h3">Log export</h1><p class="text-secondary">Forward structured JSON events to syslog or an HTTPS collector. Splunk HEC, Datadog Logs and Elasticsearch Bulk formats are supported. Local logging continues if the remote collector fails.</p>
 <form class="card" method="post" action="/admin/collector/save"><div class="card-body"><div class="row g-3">
 <div class="col-md-4"><label class="form-label">Log export transport</label><select name="mode" class="form-select" data-selected="$mode"><option value="off">Disabled</option><option value="syslog">Syslog RFC 5424</option><option value="https">HTTPS collector</option></select></div>
 <div class="col-md-4"><label class="form-label">Syslog server</label><input class="form-control" name="host" value="$(html_escape "$(jq -r '.host // ""' <<< "$config")")" placeholder="logs.internal.example"></div>
@@ -1362,13 +1379,8 @@ collector_page() {
 <div class="col-md-4"><label class="form-label">HTTP collector provider</label><select class="form-select" name="provider" data-selected="$(html_escape "$(jq -r '.provider // "generic"' <<< "$config")")"><option>generic</option><option>splunk</option><option>datadog</option><option>elastic</option></select></div>
 <div class="col-md-8"><label class="form-label">HTTPS collector endpoint</label><input class="form-control" name="url" value="$(html_escape "$(jq -r '.url // ""' <<< "$config")")" placeholder="https://collector.example.com/events"></div>
 <div class="col-md-12"><label class="form-label">API token (leave blank to keep existing)</label><input class="form-control" type="password" autocomplete="new-password" name="token"></div>
-</div><hr><h2 class="h6">SMTP for alert emails</h2><div class="row g-3">
-<div class="col-md-6"><label class="form-label">SMTP host</label><input class="form-control" name="smtp_host" value="$(html_escape "$(jq -r '.smtp_host // ""' <<< "$config")")" placeholder="smtp.example.com"></div>
-<div class="col-md-2"><label class="form-label">SMTP STARTTLS port</label><input class="form-control" type="number" name="smtp_port" value="$(html_escape "$(jq -r '.smtp_port // 587' <<< "$config")")"></div>
-<div class="col-md-4"><label class="form-label">From address</label><input class="form-control" name="mail_from" value="$(html_escape "$(jq -r '.mail_from // ""' <<< "$config")")" placeholder="alerts@example.com"></div>
-<div class="col-md-6"><label class="form-label">SMTP username</label><input class="form-control" name="smtp_user" value="$(html_escape "$(jq -r '.smtp_user // ""' <<< "$config")")"></div>
-<div class="col-md-6"><label class="form-label">SMTP password (leave blank to keep existing)</label><input type="password" autocomplete="new-password" class="form-control" name="smtp_password"></div>
 </div></div><div class="card-footer text-end"><button class="btn btn-primary">Save export configuration</button></div></form>
+<p class="small text-secondary mt-3">Email alert delivery is configured in <a href="/admin/server">Server Settings → SMTP email for alerts</a>.</p>
 <p class="small text-secondary mt-3">Delivery status and retry errors are recorded in <code>/data/logs/observability-worker.log</code>. Events and configuration persist under <code>/data</code>. Restrict collector endpoints to trusted destinations.</p>
 HTML
   page_tail
@@ -1538,7 +1550,7 @@ handle_post() {
       redirect "/admin/alerts"
       ;;
     /admin/collector/save)
-      run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}" "${PARAM[smtp_host]:-}" "${PARAM[smtp_port]:-587}" "${PARAM[smtp_user]:-}" "${PARAM[smtp_password]:-}" "${PARAM[mail_from]:-}"
+      run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}"
       redirect "/admin/collector"
       ;;
     /admin/password/change)
@@ -1552,6 +1564,11 @@ handle_post() {
 <a class="btn btn-primary" href="/admin/server">Return to Server Settings</a>
 HTML
       page_tail
+      ;;
+
+    /admin/server/smtp/save)
+      run_or_error /opt/liteedge/bin/obsctl.sh smtp-save "${PARAM[smtp_host]:-}" "${PARAM[smtp_port]:-587}" "${PARAM[smtp_user]:-}" "${PARAM[smtp_password]:-}" "${PARAM[mail_from]:-}"
+      redirect "/admin/server"
       ;;
 
     /admin/server/save)
@@ -1620,7 +1637,7 @@ case "$path" in
   /admin/logs/export) logs_export ;;
   /admin/alerts) alerts_page ;;
   /admin/collector) collector_page ;;
-  /admin/site/save|/admin/site/delete|/admin/site/enable|/admin/site/disable|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
+  /admin/site/save|/admin/site/delete|/admin/site/enable|/admin/site/disable|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/server/smtp/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
     handle_post "$path" ;;
   *)
     page_head "Not found"

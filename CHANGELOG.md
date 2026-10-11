@@ -6,6 +6,9 @@ See the Git history for individual implementation and corrective commits.
 
 ## October 10, 2026 — Site and route operations
 
+- **SMTP moved to Server Settings.** Email alert delivery has a dedicated SMTP
+  configuration form and save operation. Log Export updates no longer
+  overwrite SMTP settings; existing credentials remain in persistent data.
 - **Reversible site disable/enable.** The Sites list and Manage page expose
   status controls. Disabled sites respond with HTTP 503 but retain their
   hostnames, routes, policies and TLS certificates.
@@ -47,7 +50,7 @@ See [Site routing and health operations](docs/site-routing-and-health.md).
   feedback, including import forms and API actions.
 - **Regression coverage.** Added the authenticated management HTTP
   regression suite, import/export coverage, and checks that CGI POST routes
-  have tests. The current matrix covers 34 POST actions.
+  have tests. The current matrix covers 35 POST actions.
 - **On-demand Logs.** Opening Logs no longer queries event storage.
   Search requires an explicit filter and user action.
 - **Certificates and migration.** Added per-site Let's Encrypt email

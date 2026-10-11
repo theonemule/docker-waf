@@ -113,6 +113,12 @@ status and backend address.
 
 ### Health-based alerts
 
+For SMTP email delivery, first open **Server Settings → SMTP email for
+alerts**, enter the SMTP hostname, STARTTLS port, sender email, optional
+username and password, and save. Email settings are separate from Log Export
+and stored persistently. The password remains blank in the UI after saving,
+and leaving it blank during an update retains the saved credential.
+
 In **Alerts**, create a rule with **Event type → Backend health** and
 **Event action → Backend down**, **Count ≥ 1**, then choose any host/route
 scope, rolling window, cooldown, and HTTPS webhook or SMTP email. Save it.

@@ -74,6 +74,22 @@ PATH="$TMP/mock:$PATH" "$ROOT/bin/obs-worker.sh" tick
 ! "$TMP/obsctl.sh" collector | grep -q secret-token
 "$TMP/obsctl.sh" collector-save https '' 514 udp splunk 'https://splunk.example.org/services/collector' '' '' 587 '' '' ''
 [[ "$(jq -r '.token' "$OBS_DIR/collector.json")" == secret-token ]]
+# SMTP can be edited separately and must not reset the log exporter.
+"$TMP/obsctl.sh" smtp-save smtp.example.org 587 notifier@example.org 'smtp-test-password' alerts@example.org
+[[ "$(jq -r '.smtp_host' "$OBS_DIR/collector.json")" == smtp.example.org ]]
+[[ "$(jq -r '.smtp_password' "$OBS_DIR/collector.json")" == smtp-test-password ]]
+[[ "$(jq -r '.token' "$OBS_DIR/collector.json")" == secret-token ]]
+"$TMP/obsctl.sh" collector-save off '' 514 udp generic '' ''
+[[ "$(jq -r '.smtp_password' "$OBS_DIR/collector.json")" == smtp-test-password ]]
+"$TMP/obsctl.sh" smtp-save new-smtp.example.org 2525 notifier@example.org '' alerts@example.org
+[[ "$(jq -r '.smtp_host' "$OBS_DIR/collector.json")" == new-smtp.example.org ]]
+[[ "$(jq -r '.smtp_password' "$OBS_DIR/collector.json")" == smtp-test-password ]]
+[[ "$(jq -r '.mode' "$OBS_DIR/collector.json")" == off ]]
+! "$TMP/obsctl.sh" collector | grep -q smtp-test-password
+if "$TMP/obsctl.sh" smtp-save 'bad/smtp' 587 user secret alerts@example.org >/dev/null 2>&1; then
+  echo 'Invalid SMTP hostname accepted' >&2; exit 1
+fi
+[[ "$(jq -r '.smtp_host' "$OBS_DIR/collector.json")" == new-smtp.example.org ]]
 # Export records include filtered fields but not query secrets.
 "$TMP/obsctl.sh" query all app.test '' 443 '' 4xx '' 100 0 | jq -e 'length > 0' >/dev/null 2>&1 || true
 if "$TMP/obsctl.sh" query all '' '' '' '' bad '' 100 0 >/dev/null 2>&1; then echo 'Invalid status accepted' >&2; exit 1; fi

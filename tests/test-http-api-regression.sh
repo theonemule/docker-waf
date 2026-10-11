@@ -82,6 +82,11 @@ assert_body 'Page not found'
 assert_code 200 "$(get '/admin/server')" 'Password settings available'
 assert_body 'Administrator password'
 assert_body 'action="/admin/password/change"'
+assert_body 'action="/admin/server/smtp/save"'
+assert_body 'SMTP email for alerts'
+assert_code 200 "$(get /admin/collector)" 'Collector form displays SMTP navigation'
+assert_body 'Server Settings'
+if grep -Fq 'name="smtp_password"' "$RESP"; then echo 'SMTP fields still on collector page' >&2; exit 1; fi
 # First test the actual backend: a wrong current credential leaves the old
 # Basic Auth credential operational; a valid change immediately rejects it.
 assert_code 200 "$(post /admin/password/change -d 'current_password=invalid-value' -d 'new_password=example-updated-credential' -d 'confirm_password=example-updated-credential')" 'Reject wrong current password'
@@ -187,6 +192,18 @@ must_redirect /admin/alerts/delete -d 'id=test-api-alert'
 docker exec "$NAME" jq -e 'length==0' /data/observability/alerts.json >/dev/null
 must_redirect /admin/collector/save -d 'mode=off' -d 'protocol=udp' -d 'port=514' -d 'provider=generic'
 docker exec "$NAME" jq -e '.mode=="off"' /data/observability/collector.json >/dev/null
+must_redirect /admin/server/smtp/save -d 'smtp_host=smtp.example.org' -d 'smtp_port=587' -d 'smtp_user=alerts@example.org' -d 'smtp_password=integration-secret' -d 'mail_from=notices@example.org'
+docker exec "$NAME" jq -e '.smtp_host=="smtp.example.org" and .smtp_password=="integration-secret"' /data/observability/collector.json >/dev/null
+must_redirect /admin/collector/save -d 'mode=off' -d 'protocol=udp' -d 'port=514' -d 'provider=generic'
+docker exec "$NAME" jq -e '.smtp_password=="integration-secret"' /data/observability/collector.json >/dev/null
+must_redirect /admin/server/smtp/save -d 'smtp_host=smtp.example.org' -d 'smtp_port=587' -d 'smtp_user=alerts@example.org' -d 'mail_from=notices@example.org'
+docker exec "$NAME" jq -e '.smtp_password=="integration-secret"' /data/observability/collector.json >/dev/null
+assert_code 200 "$(post /admin/server/smtp/save -d 'smtp_host=bad/host' -d 'smtp_port=587' -d 'mail_from=notices@example.org')" 'Reject invalid SMTP hostname'
+assert_body 'Request failed'
+docker exec "$NAME" jq -e '.smtp_host=="smtp.example.org"' /data/observability/collector.json >/dev/null
+assert_code 200 "$(get /admin/server)" 'SMTP settings are read back'
+assert_body 'smtp.example.org'
+if grep -Fq 'integration-secret' "$RESP"; then echo 'SMTP secret leaked to Server Settings' >&2; exit 1; fi
 assert_code 200 "$(post /admin/collector/save -d 'mode=https' -d 'url=http://insecure.example.org/')" 'Reject insecure collector'
 assert_body 'Request failed'
 must_redirect /admin/server/save -d 'worker_connections=1024' -d 'keepalive_timeout=65' -d 'header_timeout=15' -d 'body_timeout=15' -d 'send_timeout=30' -d 'route_timeout=60'
@@ -238,7 +255,7 @@ routes=(
  '/admin/owasp/custom/disable:wafctl.sh' '/admin/owasp/custom/enable:wafctl.sh'
  '/admin/owasp/custom/delete:wafctl.sh'
  '/admin/alerts/save:obsctl.sh' '/admin/alerts/delete:obsctl.sh'
- '/admin/collector/save:obsctl.sh' '/admin/server/save:serverctl.sh' '/admin/password/change:adminctl.sh'
+ '/admin/collector/save:obsctl.sh' '/admin/server/smtp/save:obsctl.sh' '/admin/server/save:serverctl.sh' '/admin/password/change:adminctl.sh'
  '/admin/config/save:sitectl.sh' '/admin/config/reset:sitectl.sh'
 )
 for pair in "${routes[@]}"; do

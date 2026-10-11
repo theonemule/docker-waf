@@ -337,8 +337,12 @@ under `/data/observability/health`. Probe transitions are logged in
 
 The **Log Export** page configures one external sink, either RFC 5424 syslog
 (UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
-Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP with STARTTLS
-for email notifications. Tokens and SMTP passwords are stored in mode 0600 files
+Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP for email
+alerts separately in **Server Settings → SMTP email for alerts**. Set an SMTP
+hostname, STARTTLS port (default 587), sender address, optional username,
+and password, then save. The SMTP form preserves an existing password when left
+blank; saving log export configuration cannot clear the SMTP setup.
+Tokens and SMTP passwords are stored in mode 0600 files
 under `/data/observability` and never displayed in the form after saving.
 Events live under `/data/logs/events.jsonl`; ModSecurity source audit logs are
 stored in `/data/logs/modsec_audit.json` and normalized into central events.
@@ -447,7 +451,7 @@ custom variables.
 CI runs fast backend validation and test fixtures, then builds the appliance
 and executes **the management HTTP regression suite against a disposable,
 authenticated Docker container** before publishing the image. Tests exercise
-all 34 current management POST actions (using isolated mocked backends for
+all 35 current management POST actions (using isolated mocked backends for
 network/destructive actions), real site/route CRUD, server settings, alerts,
 collector configuration, certificate-contact validation, authentication,
 unsafe-input rejection, raw import/export method restrictions, filterable HTTP

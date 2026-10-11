@@ -94,7 +94,7 @@ query() {
 }
 
 save_collector() {
-  local mode="${1:-off}" host="${2:-}" port="${3:-514}" protocol="${4:-udp}" provider="${5:-generic}" url="${6:-}" token="${7:-}" smtp_host="${8:-}" smtp_port="${9:-587}" smtp_user="${10:-}" smtp_password="${11:-}" mail_from="${12:-}"
+  local mode="$1" host="$2" port="$3" protocol="$4" provider="$5" url="$6" token="$7"
   [[ "$mode" == off || "$mode" == syslog || "$mode" == https ]] || die 'Unsupported collector mode.'
   [[ "$protocol" == udp || "$protocol" == tcp || "$protocol" == tls ]] || die 'Unsupported syslog transport.'
   [[ "$provider" == generic || "$provider" == splunk || "$provider" == datadog || "$provider" == elastic ]] || die 'Unsupported HTTP collector.'
@@ -102,18 +102,31 @@ save_collector() {
     if ! { valid_host "$host" && valid_port "$port"; }; then die 'Invalid syslog host or port.'; fi
   fi
   if [[ "$mode" == https ]]; then valid_https "$url" || die 'Collector must be an HTTPS URL.'; fi
+  # Keep all SMTP settings untouched when saving a log export sink. Previously
+  # omitting SMTP controls from the exporter form erased the mail configuration.
+  jq -n --argjson previous "$(cat "$COLLECTOR")" \
+    --arg mode "$mode" --arg host "$host" --arg port "$port" --arg protocol "$protocol" \
+    --arg provider "$provider" --arg url "$url" --arg token "$token" '
+    $previous + {mode:$mode,host:$host,port:($port|tonumber),protocol:$protocol,
+      provider:$provider,url:$url,
+      token:(if $token=="" then ($previous.token // "") else $token end)}' | atomic_file "$COLLECTOR"
+}
+
+save_smtp() {
+  local smtp_host="$1" smtp_port="$2" smtp_user="$3" smtp_password="$4" mail_from="$5"
   if [[ -n "$smtp_host" ]]; then
     if ! { valid_host "$smtp_host" && valid_port "$smtp_port"; }; then die 'Invalid SMTP host or port.'; fi
+    valid_email "$mail_from" || die 'A valid From address is required for SMTP.'
+  else
+    [[ -z "$smtp_user" && -z "$mail_from" && -z "$smtp_password" ]] || die 'SMTP host is required when specifying email settings.'
+    valid_port "$smtp_port" || die 'Invalid SMTP port.'
   fi
-  if [[ -n "$mail_from" ]]; then valid_email "$mail_from" || die 'Invalid sender address.'; fi
-  [[ -z "$smtp_user" || -n "$smtp_host" ]] || die 'SMTP username requires SMTP host.'
-  # Leaving passwords blank retains previously stored values. Never echo them into the page.
+  # Retain existing password when left blank. Blank host disables and clears SMTP.
   jq -n --argjson previous "$(cat "$COLLECTOR")" \
-    --arg mode "$mode" --arg host "$host" --arg port "$port" --arg protocol "$protocol" --arg provider "$provider" --arg url "$url" --arg token "$token" --arg smtp_host "$smtp_host" --arg smtp_port "$smtp_port" --arg smtp_user "$smtp_user" --arg smtp_password "$smtp_password" --arg mail_from "$mail_from" '
-    {mode:$mode, host:$host,port:($port|tonumber),protocol:$protocol,provider:$provider,url:$url,
-      token:(if $token=="" then ($previous.token // "") else $token end),
-      smtp_host:$smtp_host,smtp_port:($smtp_port|tonumber),smtp_user:$smtp_user,
-      smtp_password:(if $smtp_password=="" then ($previous.smtp_password // "") else $smtp_password end),
+    --arg smtp_host "$smtp_host" --arg smtp_port "$smtp_port" --arg smtp_user "$smtp_user" \
+    --arg smtp_password "$smtp_password" --arg mail_from "$mail_from" '
+    $previous + {smtp_host:$smtp_host,smtp_port:($smtp_port|tonumber),smtp_user:$smtp_user,
+      smtp_password:(if $smtp_host=="" then "" elif $smtp_password=="" then ($previous.smtp_password // "") else $smtp_password end),
       mail_from:$mail_from}' | atomic_file "$COLLECTOR"
 }
 
@@ -160,10 +173,11 @@ case "${1:-}" in
   query) shift; query "$@" ;;
   collector) jq 'del(.token,.smtp_password)' "$COLLECTOR" ;;
   collector-save) shift; save_collector "$@" ;;
+  smtp-save) shift; save_smtp "$@" ;;
   alerts) cat "$ALERTS" ;;
   alert-save) shift; add_alert "$@" ;;
   alert-delete)
     [[ "${2:-}" =~ ^[A-Za-z0-9_-]{1,48}$ ]] || die 'Invalid alert ID.'
     jq --arg id "$2" 'map(select(.id != $id))' "$ALERTS" | atomic_file "$ALERTS" ;;
-  *) echo 'Usage: obsctl.sh query|collector|collector-save|alerts|alert-save|alert-delete' >&2; exit 2 ;;
+  *) echo 'Usage: obsctl.sh query|collector|collector-save|smtp-save|alerts|alert-save|alert-delete' >&2; exit 2 ;;
 esac
