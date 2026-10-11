@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           bash tests/test-deployment.sh
           bash tests/test-observability.sh
+          bash tests/test-lb-health.sh
           bash tests/test-alert-selectors.sh
           bash tests/test-log-selectors.sh
           bash tests/test-native-nginx-migration.sh

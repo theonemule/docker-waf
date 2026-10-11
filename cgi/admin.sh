@@ -212,10 +212,10 @@ HTML
   </div></div>
 </dialog>
 <div class="card shadow-sm"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
-<thead><tr><th>Host</th><th>Aliases</th><th>Routes</th><th>TLS</th><th class="text-end">Actions</th></tr></thead><tbody>
+<thead><tr><th>Host</th><th>Aliases</th><th>Routes</th><th>TLS</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody>
 HTML
   if [[ ${#files[@]} -eq 0 ]]; then
-    echo '<tr><td colspan="5" class="text-center text-secondary py-5">No sites configured yet.</td></tr>'
+    echo '<tr><td colspan="6" class="text-center text-secondary py-5">No sites configured yet.</td></tr>'
   else
     for file in "${files[@]}"; do
       host="$(kv_get "$file" HOST)"; aliases="$(kv_get "$file" ALIASES)"
@@ -226,8 +226,9 @@ HTML
       fi
       if [[ "$route_count" == 0 && -n "$(kv_get "$file" UPSTREAM)" ]]; then route_count=1; fi
       tls="$(cert_mode "$host")"
+      enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
       cat <<HTML
-<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
+<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)" type="submit">$([[ "$enabled" == 1 ]] && echo Disable || echo Enable)</button></form> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
 HTML
     done
   fi
@@ -254,6 +255,11 @@ site_editor() {
 </div></div><div class="card-footer text-end"><button class="btn btn-primary" type="submit">Save site</button></div></form>
 HTML
   if [[ "$exists" == 1 ]]; then
+    file="$(site_file "$host")"
+    enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
+    cat <<HTML
+<div class="d-flex align-items-center gap-3 mb-3"><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span><form method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)">$([[ "$enabled" == 1 ]] && echo 'Disable site' || echo 'Enable site')</button></form><span class="text-secondary small">Disabling returns HTTP 503 without deleting routes or certificates.</span></div>
+HTML
     routes_panel "$host"
     certificate_panel "$host"
     advanced_nginx_panel "$host"
@@ -325,12 +331,24 @@ HTML
       if [[ -z "$waf_plugins" && "$legacy_profile" == wordpress && -d "$WAF_PLUGIN_DIR/wordpress-rule-exclusions" ]]; then
         waf_plugins=wordpress-rule-exclusions
       fi
+      backends="$(kv_get "$route" BACKENDS)"
+      lb_mode="$(kv_get "$route" LB_MODE)"; lb_mode="${lb_mode:-round_robin}"
+      max_fails="$(kv_get "$route" MAX_FAILS)"; max_fails="${max_fails:-3}"
+      fail_timeout="$(kv_get "$route" FAIL_TIMEOUT)"; fail_timeout="${fail_timeout:-30}"
+      health_enabled="$(kv_get "$route" HEALTH_ENABLED)"
+      health_path="$(kv_get "$route" HEALTH_PATH)"; health_path="${health_path:-/health}"
+      health_expect="$(kv_get "$route" HEALTH_EXPECT)"; health_expect="${health_expect:-200}"
+      health_interval="$(kv_get "$route" HEALTH_INTERVAL)"; health_interval="${health_interval:-30}"
+      health_timeout="$(kv_get "$route" HEALTH_TIMEOUT)"; health_timeout="${health_timeout:-5}"
+      health_fall="$(kv_get "$route" HEALTH_FALL)"; health_fall="${health_fall:-3}"
+      health_rise="$(kv_get "$route" HEALTH_RISE)"; health_rise="${health_rise:-2}"
+      health_cooldown="$(kv_get "$route" HEALTH_COOLDOWN)"; health_cooldown="${health_cooldown:-300}"
       plugin_count=0
       [[ -n "$waf_plugins" ]] && plugin_count="$(awk -F, '{print NF}' <<< "$waf_plugins")"
 
       cat <<HTML
-<details class="border rounded p-3 mb-3">
-<summary class="d-flex flex-wrap gap-2 align-items-center"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "${target:-(native Nginx action)}")</code>$([[ "$action" == custom ]] && echo '<span class="badge text-bg-secondary">Imported custom</span>')<span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</summary>
+<div class="border rounded p-3 mb-3 d-flex flex-wrap gap-2 align-items-center"><div class="d-flex flex-wrap gap-2 align-items-center flex-grow-1"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "${target:-(native Nginx action)}")</code>$([[ "$action" == custom ]] && echo '<span class="badge text-bg-secondary">Imported custom</span>')<span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</div><button class="btn btn-sm btn-outline-primary" type="button" data-dialog-open="routeDialog_$id" $([[ "$action" == custom ]] && echo disabled)>Configure</button></div>
+<dialog class="liteedge-dialog liteedge-dialog-lg" id="routeDialog_$id"><div class="card border-0"><div class="card-header d-flex justify-content-between align-items-center"><strong>Edit route $(html_escape "$path")</strong><button class="btn-close" type="button" data-dialog-close aria-label="Close"></button></div><div class="card-body">
 HTML
       if [[ "$action" == custom ]]; then
         echo '<p class="small text-secondary mt-3">This imported route has custom Nginx behavior (redirect, health check, or ACME). Its original directives are preserved in the site Advanced NGINX configuration. Proxy targets are editable directly on proxy routes.</p>'
@@ -343,6 +361,17 @@ HTML
 <div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" value="$(html_escape "$target")" required></div>
 <div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$timeout")" required></div>
 </div>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
+<label class="form-label">Additional backend URLs (one per line)</label><textarea class="form-control font-monospace" name="backends" rows="3" placeholder="http://backend2:8080">$(html_escape "$(tr ',' '\n' <<< "$backends" | sed '/^$/d')")</textarea>
+<div class="form-text">Primary target above plus these backends form one pool. Use HTTP endpoints with matching base paths. Open-source NGINX uses passive failure detection.</div>
+<div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin" $(selected "$lb_mode" round_robin)>Round robin</option><option value="least_conn" $(selected "$lb_mode" least_conn)>Least connections</option><option value="ip_hash" $(selected "$lb_mode" ip_hash)>Client IP hash</option><option value="cookie" $(selected "$lb_mode" cookie)>Affinity cookie (HTTPS)</option></select></div>
+<div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="$(html_escape "$max_fails")"></div>
+<div class="col-md-4"><label class="form-label">Fail timeout (seconds)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="$(html_escape "$fail_timeout")"></div></div>
+</fieldset>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Active health probe</legend>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" name="health_enabled" value="1" id="health_$id" $(checkbox "$health_enabled")><label class="form-check-label" for="health_$id">Enable HTTP checks and health events</label></div>
+<div class="row g-3"><div class="col-md-5"><label class="form-label">Probe path</label><input class="form-control" name="health_path" value="$(html_escape "$health_path")"></div><div class="col-md-3"><label class="form-label">Expected status</label><input class="form-control" name="health_expect" value="$(html_escape "$health_expect")"></div><div class="col-md-2"><label class="form-label">Interval (sec)</label><input class="form-control" type="number" name="health_interval" min="10" max="3600" value="$(html_escape "$health_interval")"></div><div class="col-md-2"><label class="form-label">Timeout (sec)</label><input class="form-control" type="number" name="health_timeout" min="1" max="3600" value="$(html_escape "$health_timeout")"></div><div class="col-md-4"><label class="form-label">Failures before down</label><input class="form-control" type="number" name="health_fall" min="1" max="100" value="$(html_escape "$health_fall")"></div><div class="col-md-4"><label class="form-label">Successes before recovery</label><input class="form-control" type="number" name="health_rise" min="1" max="100" value="$(html_escape "$health_rise")"></div><div class="col-md-4"><label class="form-label">Notification cooldown (sec)</label><input class="form-control" type="number" name="health_cooldown" min="10" max="3600" value="$(html_escape "$health_cooldown")"></div></div>
+<div class="form-text">Checks produce down/recovery events for alerts. Traffic exclusion is handled by NGINX passive max_fails/fail_timeout, not active probe state.</div></fieldset>
 <div class="border rounded p-3 mt-3">
 <div class="d-flex flex-wrap gap-4 align-items-center mb-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="waf" value="1" id="waf_$id" $(checkbox "$waf")><label class="form-check-label fw-semibold" for="waf_$id">OWASP CRS</label></div>
@@ -369,13 +398,14 @@ HTML
       fi
       cat <<HTML
 <form method="post" action="/admin/route/delete" class="mt-2"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete route</button></form>
-</details>
+</div></div></dialog>
 HTML
     done
   fi
 
   cat <<HTML
-<hr class="my-4"><h2 class="h6">Add route</h2>
+<button class="btn btn-outline-primary" type="button" data-dialog-open="addRouteDialog">Add route</button>
+<dialog class="liteedge-dialog liteedge-dialog-lg" id="addRouteDialog"><div class="card border-0"><div class="card-header d-flex justify-content-between"><strong>Add route</strong><button class="btn-close" type="button" data-dialog-close aria-label="Close"></button></div><div class="card-body">
 <form method="post" action="/admin/route/add"><input type="hidden" name="host" value="$(html_escape "$host")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix">Prefix</option><option value="exact">Exact</option><option value="regex">Regex</option></select></div>
@@ -383,6 +413,13 @@ HTML
 <div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" placeholder="http://app:8080" required></div>
 <div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$default_timeout")" required></div>
 </div>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
+<label class="form-label">Additional backend URLs (one per line)</label><textarea class="form-control font-monospace" name="backends" rows="3" placeholder="http://backend2:8080"></textarea>
+<div class="form-text">Primary target plus additional URLs form a pool. Backends must be HTTP endpoints with matching base paths.</div>
+<div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin">Round robin</option><option value="least_conn">Least connections</option><option value="ip_hash">Client IP hash</option><option value="cookie">Affinity cookie (HTTPS)</option></select></div><div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="3"></div><div class="col-md-4"><label class="form-label">Fail timeout (sec)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="30"></div></div></fieldset>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Active health probe</legend>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" name="health_enabled" value="1" id="new_health"><label class="form-check-label" for="new_health">Enable HTTP checks and health events</label></div>
+<div class="row g-3"><div class="col-md-5"><label class="form-label">Probe path</label><input class="form-control" name="health_path" value="/health"></div><div class="col-md-3"><label class="form-label">Expected status</label><input class="form-control" name="health_expect" value="200"></div><div class="col-md-2"><label class="form-label">Interval (sec)</label><input class="form-control" type="number" name="health_interval" min="10" max="3600" value="30"></div><div class="col-md-2"><label class="form-label">Timeout (sec)</label><input class="form-control" type="number" name="health_timeout" min="1" max="3600" value="5"></div><div class="col-md-4"><label class="form-label">Failures before down</label><input class="form-control" type="number" name="health_fall" min="1" max="100" value="3"></div><div class="col-md-4"><label class="form-label">Successes before recovery</label><input class="form-control" type="number" name="health_rise" min="1" max="100" value="2"></div><div class="col-md-4"><label class="form-label">Notification cooldown (sec)</label><input class="form-control" type="number" name="health_cooldown" min="10" max="3600" value="300"></div></div><div class="form-text">Down/recovery events can trigger rules on the Alerts screen.</div></fieldset>
 <div class="border rounded p-3 mt-3">
 <div class="d-flex flex-wrap gap-4 align-items-center mb-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="waf" value="1" id="new_waf" checked><label class="form-check-label fw-semibold" for="new_waf">OWASP CRS</label></div>
@@ -403,6 +440,7 @@ HTML
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="new_https" checked><label class="form-check-label" for="new_https">HTTP → HTTPS</label></div>
 </div>
 <button class="btn btn-outline-primary mt-3" type="submit">Add route</button></form>
+</div></div></dialog>
 </div></div>
 HTML
 }
@@ -685,7 +723,7 @@ plugin_config_panels() {
       <button class="btn btn-sm btn-primary" type="submit">Save configuration</button>
     </div>
   </form>
-</details>
+</div></div></dialog>
 HTML
     done
   done < <(installed_plugin_rows)
@@ -1158,7 +1196,7 @@ HTML
   cat <<HTML
 </div></div>
 <form action="/admin/logs" method="get" id="logFilterForm" class="card mb-3 shadow-sm" data-log-initial-scopes="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="scopes_json" value="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="apply" value="1"><div class="card-body"><div class="row g-2">
-<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">All</option><option value="http">HTTP</option><option value="waf">WAF rules</option></select></div>
+<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">All</option><option value="http">HTTP</option><option value="waf">WAF rules</option><option value="health">Health probes</option></select></div>
 <div class="col-md-5"><label class="form-label" for="logHostButton">Hosts and aliases</label><div class="position-relative" data-log-picker="hosts">
 <button class="form-select text-start" type="button" id="logHostButton" data-log-toggle="hosts" aria-expanded="false" aria-controls="logHostOptions">All hosts (select to filter)</button>
 <div class="alert-option-menu border rounded bg-body shadow p-2" id="logHostOptions" hidden><div class="text-secondary small px-2 pb-2">Select multiple configured hosts or aliases</div>
@@ -1218,8 +1256,9 @@ HTML
     kind="$(jq -r '.type // ""' <<< "$event")"
     badge_color=secondary
     [[ "$kind" == waf ]] && badge_color=warning
+    [[ "$kind" == health ]] && badge_color=info
     cat <<HTML
-<tr><td class="text-nowrap">$(html_escape "$(jq -r '.timestamp // ""' <<< "$event")")</td><td><span class="badge text-bg-$badge_color">$(html_escape "$kind")</span></td><td>$(html_escape "$(jq -r '.host // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r '.route // ""' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.port // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.method // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.status // ""' <<< "$event")")</td><td class="font-monospace">$(html_escape "$(jq -r '.ip // ""' <<< "$event")")</td><td class="text-break">$(html_escape "$(jq -r '.uri // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r 'if .type=="waf" then "Rule \(.rule_id): \(.message)" else "Request \(.request_id // "")" end' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.action // ""' <<< "$event")")</td></tr>
+<tr><td class="text-nowrap">$(html_escape "$(jq -r '.timestamp // ""' <<< "$event")")</td><td><span class="badge text-bg-$badge_color">$(html_escape "$kind")</span></td><td>$(html_escape "$(jq -r '.host // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r '.route // ""' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.port // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.method // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.status // ""' <<< "$event")")</td><td class="font-monospace">$(html_escape "$(jq -r '.ip // ""' <<< "$event")")</td><td class="text-break">$(html_escape "$(jq -r '.uri // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r 'if .type=="waf" then "Rule \(.rule_id): \(.message)" elif .type=="health" then "\(.message // "") (probe status \(.probe_status // ""))" else "Request \(.request_id // "")" end' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.action // ""' <<< "$event")")</td></tr>
 HTML
   done <<< "$events"
   echo '</tbody></table></div></div>'
@@ -1251,7 +1290,7 @@ alerts_page() {
   catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
   page_head "Alerts"
   cat <<'HTML'
-<h1 class="h3">Alerts</h1><p class="text-secondary">A rule matches events in a rolling time window, triggers at a threshold, and delivers an email or HTTPS webhook. WAF blocking remains managed by OWASP CRS and route policy.</p>
+<h1 class="h3">Alerts</h1><p class="text-secondary">A rule matches events in a rolling time window, triggers at a threshold, and delivers an email or HTTPS webhook. Choose Backend health + Backend down + Count 1 to alert on a probe outage. Recovered matches recovery events. Passive failure detection remains managed by NGINX.</p>
 <div class="card mb-3"><div class="card-header"><strong>Configured alert rules</strong></div><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Name</th><th>Condition</th><th>Trigger</th><th>Action</th><th></th></tr></thead><tbody>
 HTML
   while IFS= read -r rule; do
@@ -1265,8 +1304,8 @@ HTML
 <div class="card"><div class="card-header"><strong>Create or update alert</strong></div><div class="card-body"><form id="alertRuleForm" method="post" action="/admin/alerts/save"><input type="hidden" name="scopes_json" value="[]"><div class="row g-3">
 <div class="col-md-3"><label class="form-label">Rule ID</label><input class="form-control" name="id" pattern="[A-Za-z0-9_-]+" maxlength="48" required placeholder="high-error-rate"></div>
 <div class="col-md-5"><label class="form-label">Description</label><input class="form-control" name="name" required maxlength="100" placeholder="5xx spike"></div>
-<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">Any</option><option value="http">HTTP</option><option value="waf">WAF match</option></select></div>
-<div class="col-md-2"><label class="form-label">WAF decision</label><select class="form-select" name="action"><option value="any">Any</option><option value="blocked">Blocked</option><option value="matched">Matched</option></select></div>
+<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">Any</option><option value="http">HTTP</option><option value="waf">WAF match</option><option value="health">Backend health</option></select></div>
+<div class="col-md-2"><label class="form-label">Event action</label><select class="form-select" name="action"><option value="any">Any</option><option value="blocked">Blocked</option><option value="matched">Matched</option><option value="down">Backend down</option><option value="up">Recovered</option></select></div>
 <div class="col-md-6"><label class="form-label" for="alertHostButton">Hosts and aliases</label>
 <div class="position-relative" data-alert-picker="hosts">
 <button class="form-select text-start" type="button" id="alertHostButton" data-alert-toggle="hosts" aria-expanded="false" aria-controls="alertHostOptions">All hosts (select to restrict)</button>
@@ -1346,6 +1385,12 @@ handle_post() {
       redirect "/admin/site?host=$host"
       ;;
 
+    /admin/site/enable|/admin/site/disable)
+      host="${PARAM[host]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh "${path##*/}" "$host"
+      redirect "/admin/site?host=$host"
+      ;;
+
     /admin/site/delete)
       host="${PARAM[host]:-}"
       run_or_error /opt/liteedge/bin/sitectl.sh delete "$host"
@@ -1355,14 +1400,14 @@ handle_post() {
     /admin/route/add)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
       redirect "/admin/site?host=$host"
       ;;
 
     /admin/route/save)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
       redirect "/admin/site?host=$host"
       ;;
 
@@ -1569,7 +1614,7 @@ case "$path" in
   /admin/logs/export) logs_export ;;
   /admin/alerts) alerts_page ;;
   /admin/collector) collector_page ;;
-  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
+  /admin/site/save|/admin/site/delete|/admin/site/enable|/admin/site/disable|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
     handle_post "$path" ;;
   *)
     page_head "Not found"

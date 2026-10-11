@@ -27,7 +27,7 @@ valid_https() { [[ "$1" =~ ^https://[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~
 # Each JSON document is checked by jq. No shell evaluation of user-defined filters.
 query() {
   local kind="${1:-all}" host="${2:-}" route="${3:-}" port="${4:-}" method="${5:-}" status="${6:-}" search="${7:-}" limit="${8:-100}" since="${9:-0}" scopes_json="${10:-}"
-  [[ "$kind" == all || "$kind" == http || "$kind" == waf ]] || die 'Invalid event type.'
+  [[ "$kind" == all || "$kind" == http || "$kind" == waf || "$kind" == health ]] || die 'Invalid event type.'
   if ! { [[ "$limit" =~ ^[0-9]{1,4}$ ]] && (( 10#$limit >= 1 && 10#$limit <= 1000 )); }; then die 'Limit must be 1-1000.'; fi
   [[ "$since" =~ ^[0-9]{1,15}$ ]] || die 'Since must be a Unix timestamp.'
   [[ -z "$status" || "$status" =~ ^[1-5][0-9]{2}$ || "$status" =~ ^[1-5]xx$ ]] || die 'Invalid status filter.'
@@ -120,8 +120,8 @@ save_collector() {
 add_alert() {
   local id="${1:-}" name="${2:-}" type="${3:-}" host="${4:-}" route="${5:-}" method="${6:-}" status="${7:-}" action="${8:-}" threshold="${9:-1}" window="${10:-60}" cooldown="${11:-300}" channel="${12:-webhook}" target="${13:-}" search="${14:-}" scopes_json="${15:-}"
   [[ "$id" =~ ^[A-Za-z0-9_-]{1,48}$ && ${#name} -le 100 && -n "$name" ]] || die 'Invalid alert ID or name.'
-  [[ "$type" == all || "$type" == waf || "$type" == http ]] || die 'Invalid event type.'
-  [[ "$action" == any || "$action" == blocked || "$action" == matched ]] || die 'Invalid WAF action.'
+  [[ "$type" == all || "$type" == waf || "$type" == http || "$type" == health ]] || die 'Invalid event type.'
+  [[ "$action" == any || "$action" == blocked || "$action" == matched || "$action" == down || "$action" == up ]] || die 'Invalid WAF action.'
   [[ "$channel" == webhook || "$channel" == email ]] || die 'Invalid alert delivery channel.'
   if [[ "$channel" == webhook ]]; then valid_https "$target" || die 'Webhook must use HTTPS.'; else valid_email "$target" || die 'Invalid recipient.'; fi
   if ! { [[ "$threshold" =~ ^[0-9]{1,5}$ ]] && (( 10#$threshold >= 1 && 10#$threshold <= 10000 )); }; then die 'Invalid event threshold.'; fi

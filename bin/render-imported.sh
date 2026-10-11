@@ -4,6 +4,8 @@
 set -euo pipefail
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
+# shellcheck disable=SC1091
+source /opt/liteedge/bin/poolctl.sh
 host="${1:?site hostname required}"
 output="${2:?output config required}"
 slug="$(slug_for_host "$host")"
@@ -135,7 +137,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     action="$(kv_get "$file" ACTION)"; [[ -n "$action" ]] || action=proxy
     match="$(kv_get "$file" MATCH)"
     path="$(kv_get "$file" PATH)"
-    target="$(kv_get "$file" TARGET)"
+    target="$(pool_effective_target "$host" "$file")"
     waf="$(kv_get "$file" WAF)"
     emit_route_snippet "$file" "$base/locations/$key.conf" "$action" "$match" "$path" "$target" "$waf" "$key" >> "$tmp"
   elif [[ "$line" =~ ^[[:space:]]*#[[:space:]]LITEEDGE_EXTRA_ROUTES:(http|https)$ ]]; then

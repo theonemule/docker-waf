@@ -106,6 +106,7 @@ save_host_only() {
   {
     printf 'HOST=%s\n' "$host"
     printf 'ALIASES=%s\n' "${aliases//,/ }"
+    printf 'ENABLED=%s\n' "$(if [[ -f "$file" ]]; then kv_get "$file" ENABLED; else printf 1; fi | grep -E '^[01]$' || printf 1)"
   } > "$tmp"
   mv "$tmp" "$file"
   mkdir -p "$(route_dir "$host")"
@@ -183,6 +184,20 @@ case "$cmd" in
     fi
     ;;
 
+  enable|disable)
+    host="${1:-}"
+    validate_known_site "$host"
+    snapshot_state
+    enabled=0
+    [[ "$cmd" == enable ]] && enabled=1
+    file="$(site_file "$host")"
+    tmp="$(mktemp)"
+    sed '/^ENABLED=/d' "$file" > "$tmp"
+    printf 'ENABLED=%s\n' "$enabled" >> "$tmp"
+    mv "$tmp" "$file"
+    apply_state
+    ;;
+
   delete)
     host="${1:-}"
     validate_host "$host"
@@ -210,6 +225,25 @@ case "$cmd" in
     waf_pl="${9:-$(waf_setting_get PARANOIA_LEVEL 1)}"
     waf_plugins="${10:-}"
     waf_disabled="${11:-}"
+    backends="${12:-}"; lb_mode="${13:-round_robin}"; max_fails="${14:-3}"; fail_timeout="${15:-30}"
+    health_enabled="$(bool_value "${16:-0}")"; health_path="${17:-/health}"; health_expect="${18:-200}"
+    health_interval="${19:-30}"; health_timeout="${20:-5}"; health_fall="${21:-3}"; health_rise="${22:-2}"; health_cooldown="${23:-300}"
+    validate_route_path "$health_path"
+    [[ "$health_expect" =~ ^[1-5]xx$ || "$health_expect" =~ ^[1-5][0-9]{2}$ ]] || die 'Probe expected status must be 2xx, 3xx, etc or an exact HTTP status.'
+    for health_numeric in health_interval health_timeout health_fall health_rise health_cooldown; do
+      health_value="${!health_numeric}"
+      if ! [[ "$health_value" =~ ^[0-9]+$ ]] || (( health_value < 1 || health_value > 3600 )); then die "Invalid $health_numeric."; fi
+    done
+    (( health_timeout <= health_interval )) || die 'Probe timeout cannot exceed interval.'
+
+    # Newline-separated textarea is normalized to a single-line data record.
+    backends="$(printf '%s' "$backends" | tr '\r\n' ',,' | sed 's/,,*/,/g;s/^,*//;s/,*$//')"
+    if [[ -n "$backends" ]]; then
+      # Functions are shared with the renderer so validation is consistent.
+      # shellcheck disable=SC1091
+source /opt/liteedge/bin/poolctl.sh
+      pool_validate "$target" "$backends" "$lb_mode" "$max_fails" "$fail_timeout"
+    fi
 
     if [[ "$waf_pl" == generic || "$waf_pl" == wordpress ]]; then
       legacy_profile="$waf_pl"
@@ -259,6 +293,8 @@ case "$cmd" in
       printf 'WAF_PL=%s\n' "$waf_pl"
       printf 'WAF_PLUGINS=%s\n' "$waf_plugins"
       printf 'WAF_DISABLED=%s\n' "$waf_disabled"
+      printf 'BACKENDS=%s\nLB_MODE=%s\nMAX_FAILS=%s\nFAIL_TIMEOUT=%s\n' "$backends" "$lb_mode" "$max_fails" "$fail_timeout"
+      printf 'HEALTH_ENABLED=%s\nHEALTH_PATH=%s\nHEALTH_EXPECT=%s\nHEALTH_INTERVAL=%s\nHEALTH_TIMEOUT=%s\nHEALTH_FALL=%s\nHEALTH_RISE=%s\nHEALTH_COOLDOWN=%s\n' "$health_enabled" "$health_path" "$health_expect" "$health_interval" "$health_timeout" "$health_fall" "$health_rise" "$health_cooldown"
       if [[ -n "$import_key" ]]; then
         printf 'ACTION=proxy\nIMPORT_KEY=%s\nIMPORT_ORIGINAL_TARGET=%s\nIMPORT_ORIGINAL_TIMEOUT=%s\nIMPORT_SCHEME=%s\n' "$import_key" "$import_original_target" "$import_original_timeout" "$import_scheme"
       fi

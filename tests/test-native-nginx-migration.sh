@@ -48,9 +48,9 @@ validate_route_path() { [[ "$1" == /* ]]; }
 validate_upstream() { [[ "$1" == http://* || "$1" == https://* ]]; }
 validate_timeout() { [[ "$1" =~ ^[0-9]+$ ]]; }
 COMMON
-sed 's@source /opt/liteedge/bin/common.sh@source "$TEST_MOCK_COMMON"@' "$ROOT/bin/render-imported.sh" > "$TMP/bin/render-imported.sh"
+sed -e 's@source /opt/liteedge/bin/common.sh@source "$TEST_MOCK_COMMON"@' -e 's@source /opt/liteedge/bin/poolctl.sh@source "$TEST_POOL_LIB"@' "$ROOT/bin/render-imported.sh" > "$TMP/bin/render-imported.sh"
 chmod +x "$TMP/bin/render-imported.sh"
-export DATA_DIR="$TMP/data" TEST_MOCK_COMMON="$TMP/mock-common.sh"
+export DATA_DIR="$TMP/data" TEST_MOCK_COMMON="$TMP/mock-common.sh" TEST_POOL_LIB="$ROOT/bin/poolctl.sh"
 output="$TMP/out/demo.conf"
 "$TMP/bin/render-imported.sh" demo.test "$output"
 [[ "$(grep -c 'location ' "$output")" == 3 ]]

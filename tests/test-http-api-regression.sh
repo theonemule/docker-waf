@@ -136,6 +136,10 @@ assert_body 'Unsupported export format'
 
 # Real CRUD against disposable persistent state.
 must_redirect /admin/site/save -d 'host=example.test' -d 'aliases=alias.example.test'
+must_redirect /admin/site/disable -d 'host=example.test'
+docker exec "$NAME" sh -c 'grep -qx ENABLED=0 /data/sites/example.test.site'
+must_redirect /admin/site/enable -d 'host=example.test'
+docker exec "$NAME" sh -c 'grep -qx ENABLED=1 /data/sites/example.test.site'
 docker exec "$NAME" sh -c 'test -s /data/sites/example.test.site'
 must_redirect /admin/route/add -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:12345' -d 'timeout=60'
 docker exec "$NAME" sh -c 'grep -Rl "^PATH=/api/$" /data/sites/example.test.routes/*.route >/dev/null'
@@ -191,7 +195,7 @@ done
 # Every POST management action must reach the correct named backend command
 # and return a redirect. Includes network-affecting handlers under mocks.
 routes=(
- '/admin/site/save:sitectl.sh' '/admin/site/delete:sitectl.sh'
+ '/admin/site/save:sitectl.sh' '/admin/site/delete:sitectl.sh' '/admin/site/disable:sitectl.sh' '/admin/site/enable:sitectl.sh'
  '/admin/route/add:sitectl.sh' '/admin/route/save:sitectl.sh'
  '/admin/route/delete:sitectl.sh' '/admin/cert/selfsigned:certctl.sh'
  '/admin/cert/email/save:certctl.sh' '/admin/cert/letsencrypt:certctl.sh'
