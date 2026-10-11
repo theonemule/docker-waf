@@ -21,7 +21,9 @@ The new JSON endpoints are protected read and management resources.
 | GET | /api/v1/catalog | Host/alias/route selectors |
 | GET | /api/v1/owasp | CRS status, plugin inventory and config, custom rules |
 | GET | /api/v1/owasp/rules | CRS rule inventory |
+| GET | /api/v1/owasp/crs/check | Check official CRS latest release metadata without downloading/installing |
 | GET | /api/v1/logs?type=http&limit=100 | Filtered events |
+| GET | /api/v1/logs?scopes_json=... | Filtered events for multiple inventory-validated hosts/aliases/routes |
 | GET | /api/v1/logs/export?... | Binary CSV/JSONL download |
 | GET | /api/v1/export?... | Binary site/configuration export |
 | GET | /api/v1/owasp/export | Binary OWASP export |
@@ -50,6 +52,14 @@ The SPA uses fragment routes at /#/sites, /#/site/HOST, /#/owasp, /#/logs, /#/al
 
 Former management-page GET URLs redirect to the corresponding SPA view. Legacy /admin/* form actions are retained for integration compatibility, but no SPA operation invokes them. The previous HTML interface is available only in disposable regression containers when LITEEDGE_ALLOW_LEGACY_UI=1 is set.
 
+The Logs SPA has searchable checkbox-based multi-select controls for hosts and
+aliases, followed by dependent route selections. The selected scopes serialize
+into `scopes_json` for both API searches and CSV/JSONL exports. Selections
+survive SPA navigation without document reloads; queries remain explicit and
+unfiltered queries are rejected. Opening the OWASP page asynchronously GETs
+`/api/v1/owasp/crs/check` and updates the current/latest versions in place,
+without installing CRS. Manual **Check updates** runs the same GET.
+
 A site may have a 1–16 endpoint backend pool. The SPA edits each URL in its own independently addable/removable row, serializing to the existing target and backends fields when saving.
 
 ## Verification and release
@@ -57,6 +67,7 @@ A site may have a 1–16 endpoint backend pool. The SPA edits each URL in its ow
 Run tests against a locally built image (not the live appliance):
 
     node tests/test-spa-static.js
+    node tests/test-spa-log-filters.js
     bash tests/test-spa-api.sh liteedge:spa-api-qa
     bash tests/test-http-api-regression.sh liteedge:spa-api-qa
     shellcheck -x cgi/*.sh bin/*.sh entrypoint.sh

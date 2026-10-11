@@ -8,3 +8,14 @@
 .spa-code {font-family:monospace;white-space:pre-wrap;overflow-wrap:anywhere;}
 .spa-check {display:flex;gap:.6rem;align-items:center;margin:.3rem 0;}
 .spa-input-error {font-size:.85rem;color:#b42318;}
+/* Inventory-backed, searchable host and route multi-selects. */
+.spa-log-picker { position:relative; }
+.spa-log-picker > summary { cursor:pointer; list-style:none; padding-right:2rem; }
+.spa-log-picker > summary::-webkit-details-marker { display:none; }
+.spa-log-picker > summary[aria-disabled="true"] { cursor:not-allowed; opacity:.65; }
+.spa-log-menu { position:absolute; left:0; right:0; min-width:min(340px,calc(100vw - 3rem)); top:100%; z-index:110; }
+.spa-log-options { max-height:250px; overflow-y:auto; }
+.spa-log-option { display:flex; align-items:center; gap:.65rem; padding:.45rem .5rem; border-radius:.25rem; cursor:pointer; }
+.spa-log-option:hover, .spa-log-option:focus-within { background:var(--bs-tertiary-bg); }
+.spa-log-option[hidden] { display:none; }
+.spa-log-option input { flex:0 0 auto; margin-top:0; }

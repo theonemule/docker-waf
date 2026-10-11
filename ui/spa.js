@@ -9,6 +9,7 @@
   const dialog = document.getElementById("spa-dialog");
   const feedback = document.getElementById("spa-feedback");
   const cache = {sites:[], site:null, plugins:[], catalog:null, rules:[], filters:{}};
+  let crsCheckSequence = 0;
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, ch =>
     ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const q = (value) => encodeURIComponent(String(value));
@@ -107,7 +108,11 @@
       if(page.view==="site") return renderSite((await api("site?host="+q(page.host))).site);
       if(page.view==="server") return renderServer(await api("server"));
       if(page.view==="alerts") return renderAlerts(await api("alerts"));
-      if(page.view==="owasp") return renderOwasp(await api("owasp"));
+      if(page.view==="owasp") {
+        renderOwasp(await api("owasp"));
+        void checkCrsUpdates();
+        return;
+      }
       if(page.view==="logs") return renderLogs(await api("catalog"));
       root.innerHTML='<div class="alert alert-warning">Page not found.</div>';
     } catch(err){renderError(err);}
@@ -304,7 +309,8 @@
        label:installed.has(p.name)?"Remove":"Install",data:{plugin:p.name},danger:installed.has(p.name)}])+'</td></tr>').join("");
     root.innerHTML='<h1 class="h3">OWASP CRS</h1>'
       +card("Core Rule Set",'<p>Installed '+escape(data.crs?.CURRENT_VERSION||"unknown")
-        +' · Latest '+escape(data.crs?.LATEST_VERSION||"not checked")+'</p>'
+        +' · Latest <span data-crs-latest>'+escape(data.crs?.LATEST_VERSION||"not checked")+'</span></p>'
+        +'<p data-crs-check-status role="status" aria-live="polite" class="small text-secondary">Checking for CRS updates…</p>'
         +rowActions([{op:"crs-check",label:"Check updates"},{op:"crs-update",label:"Update CRS"},
           {op:"crs-reset",label:"Restore bundled CRS"}, {op:"owasp-import",label:"Import bundle"},{op:"owasp-crs-import",label:"Import CRS"},{op:"owasp-export",label:"Export OWASP"}]))
       +card("Default protection level",form("owasp/pl",
@@ -328,20 +334,118 @@
                      {op:"delete-custom-rule",label:"Delete",danger:true,data:{id:c.id}}])+'</div>').join(""));
     cache.owasp=data;
   }
+  // Opening OWASP performs a check-only version query. Keep the rest of the
+  // page interactive; never initiate the archive download/install here.
+  async function checkCrsUpdates() {
+    const sequence=++crsCheckSequence;
+    const status=root.querySelector("[data-crs-check-status]");
+    if(status) {
+      status.textContent="Checking for CRS updates…";
+      status.className="small text-secondary";
+    }
+    try {
+      const response=await api("owasp/crs/check");
+      if(sequence!==crsCheckSequence || current().view!=="owasp") return;
+      const currentStatus=root.querySelector("[data-crs-check-status]");
+      if(!currentStatus) return;
+      const crs=response.crs||{};
+      if(cache.owasp) cache.owasp.crs=crs;
+      const latest=root.querySelector("[data-crs-latest]");
+      if(latest) latest.textContent=crs.LATEST_VERSION||"not checked";
+      const available=crs.UPDATE_AVAILABLE==="1";
+      currentStatus.textContent=available
+        ? "Update available: "+crs.LATEST_VERSION+" (installed: "+(crs.CURRENT_VERSION||"unknown")+")"
+        : "OWASP CRS is up to date ("+(crs.CURRENT_VERSION||"unknown")+").";
+      currentStatus.className="small "+(available?"text-warning-emphasis":"text-success");
+      const install=root.querySelector('[data-operation="crs-update"]');
+      if(install) install.disabled=!available;
+    } catch(error) {
+      if(sequence!==crsCheckSequence || current().view!=="owasp") return;
+      const currentStatus=root.querySelector("[data-crs-check-status]");
+      if(currentStatus) {
+        currentStatus.textContent="CRS update check failed: "+(error.message||String(error));
+        currentStatus.className="small text-danger";
+      }
+    }
+  }
   function customRuleEditor(rule) {
     modal(rule?"Edit custom WAF rule":"New custom WAF rule",form("owasp/custom/save",
       field("Rule ID","rule_id",rule?.id||"","text","required pattern=\"[0-9]{1,9}\"")
       +textarea("ModSecurity rule text","rule_text",rule?.content||"",12),
       rule?"Save rule":"Add rule"));
   }
+  function savedLogScopes(filters,catalog) {
+    let scopes=[];
+    try {
+      const parsed=JSON.parse(filters.scopes_json||"[]");
+      if(Array.isArray(parsed)) scopes=parsed;
+    } catch(_) { /* Ignore stale/corrupt local filter selections. */ }
+    // Older SPA releases stored a single scalar host and route.
+    if(!scopes.length && filters.host) {
+      const matched=(catalog.hosts||[]).find(h=>h.name===filters.host);
+      if(matched) scopes=[{site:matched.site,host:matched.name,
+        routes:filters.route?[filters.route]:[]}];
+    }
+    return scopes;
+  }
+  function logPicker(kind,title,entries,selectedHosts,selectedRoutes) {
+    const isHost=kind==="hosts";
+    const choices=entries.map(item=>{
+      const identity=item.site+"|"+(isHost?item.name:item.route);
+      const active=(isHost?selectedHosts:selectedRoutes).has(identity);
+      const name=isHost?item.name:item.route;
+      const label=isHost?(item.kind==="alias"?"Alias":"Site"):"Route";
+      return '<label class="spa-log-option" data-log-option>'
+        +'<input type="checkbox" class="form-check-input" data-log-'+(isHost?"host":"route")
+        +' data-site="'+escape(item.site)+'" value="'+escape(name)+'" '+(active?"checked":"")+'>'
+        +'<span class="text-break">'+escape(name)+'</span>'
+        +'<span class="small text-secondary ms-auto">'+escape(isHost?label:item.site)+'</span></label>';
+    }).join("");
+    return '<div><label class="form-label">'+escape(title)+'</label>'
+      +'<details class="spa-log-picker" data-log-picker="'+kind+'">'
+      +'<summary class="form-select" data-log-summary>'+ (isHost?"All hosts (select to filter)":"All routes (select hosts first)")+'</summary>'
+      +'<div class="spa-log-menu border rounded bg-body shadow p-2">'
+      +'<input class="form-control form-control-sm mb-2" type="search" data-log-picker-search="'+kind+'"'
+      +' aria-label="Search '+escape(title)+'" placeholder="Filter '+escape(kind)+'…">'
+      +'<div class="spa-log-options" data-log-options="'+kind+'">'+(choices||'<div class="small text-secondary">No options available.</div>')+'</div>'
+      +'<button type="button" class="btn btn-sm btn-link px-1 mt-2" data-log-clear="'+kind+'">Clear selection</button>'
+      +'</div></details>'
+      +'<div class="form-text">'+(isHost?"Select multiple configured hosts or aliases.":"Routes are limited to selected hosts; no routes selected means all their routes.")+'</div></div>';
+  }
+  function updateLogSelectors(form) {
+    const hosts=[...form.querySelectorAll("[data-log-host]:checked")];
+    const sites=new Set(hosts.map(input=>input.dataset.site));
+    const routeInputs=[...form.querySelectorAll("[data-log-route]")];
+    for(const input of routeInputs) {
+      const available=sites.has(input.dataset.site);
+      if(!available) input.checked=false;
+      input.disabled=!available;
+      const row=input.closest("[data-log-option]");
+      const search=form.querySelector('[data-log-picker-search="routes"]')?.value.trim().toLowerCase()||"";
+      if(row) row.hidden=!available||(search!==""&&!row.textContent.toLowerCase().includes(search));
+    }
+    const count=routeInputs.filter(input=>input.checked).length;
+    const hostSummary=form.querySelector('[data-log-picker="hosts"] [data-log-summary]');
+    const routeSummary=form.querySelector('[data-log-picker="routes"] [data-log-summary]');
+    if(hostSummary) hostSummary.textContent=hosts.length?hosts.length+" hosts / aliases selected":"All hosts (select to filter)";
+    if(routeSummary) routeSummary.textContent=!hosts.length?"Select hosts first":count?count+" routes selected":"All routes for selected hosts";
+    const routesPicker=form.querySelector('[data-log-picker="routes"]');
+    if(routesPicker) {
+      if(!hosts.length) routesPicker.open=false;
+      routesPicker.querySelector("summary")?.setAttribute("aria-disabled",hosts.length?"false":"true");
+    }
+  }
   function renderLogs(catalog) {
     cache.catalog=catalog;
     const f=cache.filters;
+    const scopes=savedLogScopes(f,catalog);
+    const selectedHosts=new Set(scopes.map(x=>x.site+"|"+x.host));
+    const selectedRoutes=new Set(scopes.flatMap(x=>(x.routes||[]).map(route=>x.site+"|"+route)));
     root.innerHTML='<h1 class="h3 mb-3">Logs</h1>'+card("Search events",
       '<form data-log-search><div class="spa-form-grid">'
        +select("Event type","type",[["all","Any"],["http","HTTP"],["waf","WAF"],["health","Health"]],f.type||"all")
-       +select("Host","host",[["","Any"],...(catalog.hosts||[]).map(h=>[h.name,h.name])],f.host||"")
-       +select("Route","route",[["","Any"],...(catalog.routes||[]).map(r=>[r.route,r.site+" "+r.route])],f.route||"")
+       +logPicker("hosts","Hosts and aliases",catalog.hosts||[],selectedHosts,selectedRoutes)
+       +logPicker("routes","Routes",catalog.routes||[],selectedHosts,selectedRoutes)
        +field("Listener/upstream port","port",f.port||"")
        +select("HTTP method","method",[["","Any"],...["GET","POST","PUT","PATCH","DELETE","OPTIONS"].map(x=>[x,x])],f.method||"")
        +field("HTTP status / class","status",f.status||"")
@@ -352,6 +456,7 @@
        +'<button class="btn btn-outline-secondary" type="button" data-operation="logs-csv">Export CSV</button>'
        +'<button class="btn btn-outline-secondary" type="button" data-operation="logs-jsonl">Export JSONL</button></div></form>')
        +'<div id="log-results" role="region" aria-live="polite"></div>';
+    updateLogSelectors(root.querySelector("[data-log-search]"));
   }
   function renderEvents(events) {
     const container=document.getElementById("log-results");
@@ -364,18 +469,38 @@
        ||'<tr><td colspan="7">No matching events.</td></tr>')+'</tbody></table></div>');
   }
   function logQuery(form) {
-    return Object.fromEntries(new FormData(form).entries());
+    const values=Object.fromEntries(new FormData(form).entries());
+    // The server validates each host, alias and route against its inventory.
+    const hosts=[...form.querySelectorAll("[data-log-host]:checked")];
+    const routes=[...form.querySelectorAll("[data-log-route]:checked")];
+    values.scopes_json=JSON.stringify(hosts.map(input=>({
+      host:input.value,site:input.dataset.site,
+      routes:routes.filter(route=>route.dataset.site===input.dataset.site).map(route=>route.value)
+    })));
+    delete values.host;
+    delete values.route;
+    return values;
+  }
+  function logHasFilter(values) {
+    return Object.entries(values).some(([k,v])=>
+      k!=="limit"&&k!=="apply"&&k!=="format"&&
+      (k==="scopes_json"?v!=="[]"&&!!v:k==="since"?Number(v)>0:v!==""&&v!=="all"&&v!=="0"));
   }
   async function searchLogs() {
     const form=document.querySelector("[data-log-search]");
     if(!form)return;
     const values=logQuery(form);
     cache.filters=values;
-    const active=Object.entries(values).some(([k,v])=>k!=="limit"&&k!=="since"&&v&&v!=="all"&&v!=="0");
-    if(!active){toast("Choose at least one filter before searching.","danger");return;}
-    const params=new URLSearchParams(values);
-    const result=await api("logs?"+params.toString());
-    renderEvents(result.events||[]);
+    if(!logHasFilter(values)){toast("Choose at least one filter before searching.","danger");return;}
+    const button=form.querySelector('button[type="submit"]');
+    if(button){button.disabled=true;button.textContent="Searching…";}
+    try {
+      const params=new URLSearchParams(values);
+      const result=await api("logs?"+params.toString());
+      if(current().view==="logs")renderEvents(result.events||[]);
+    } finally {
+      if(button){button.disabled=false;button.textContent="Search logs";}
+    }
   }
   function uploadDialog(kind,host="") {
     const fileLabel=kind==="owasp-crs"?"OWASP CRS archive":kind==="owasp"?"OWASP configuration":"LiteEdge configuration";
@@ -492,7 +617,7 @@
       case "delete-alert":
         if(!confirm("Delete alert "+id+"?"))return;
         await act("alerts/delete",{id});await refresh();break;
-      case "crs-check":await act("owasp/crs/check");await refresh();break;
+      case "crs-check":await checkCrsUpdates();break;
       case "crs-update":
         if(!confirm("Download, validate, and activate the latest CRS?"))return;
         await act("owasp/crs/update");await refresh();break;
@@ -553,6 +678,8 @@
         const f=document.querySelector("[data-log-search]");
         if(!f)return;
         const values=logQuery(f);
+        cache.filters=values;
+        if(!logHasFilter(values)){toast("Choose at least one filter before exporting logs.","danger");return;}
         const fmt=op==="logs-csv"?"csv":"jsonl";
         const params=new URLSearchParams({...values,apply:"1",format:fmt});
         await transfer("logs/export?"+params,"liteedge-events."+fmt);
@@ -561,12 +688,41 @@
       default:throw new Error("Unsupported UI operation "+op);
     }
   }
+  document.addEventListener("change",event=>{
+    if(!event.target.matches("[data-log-host], [data-log-route]"))return;
+    const form=event.target.closest("[data-log-search]");
+    if(!form)return;
+    updateLogSelectors(form);
+    cache.filters=logQuery(form);
+  });
   document.addEventListener("input",event=>{
+    const search=event.target.closest("[data-log-picker-search]");
+    if(search){
+      const form=search.closest("[data-log-search]");
+      const kind=search.dataset.logPickerSearch;
+      const term=search.value.trim().toLowerCase();
+      for(const row of form.querySelectorAll('[data-log-options="'+kind+'"] [data-log-option]')){
+        const checkbox=row.querySelector("input");
+        const siteVisible=kind==="hosts"||!checkbox.disabled;
+        row.hidden=!siteVisible||!row.textContent.toLowerCase().includes(term);
+      }
+      return;
+    }
     if(!event.target.matches("[data-rule-search]"))return;
     const term=event.target.value.trim().toLowerCase();
     dialog.querySelectorAll("[data-rule-row]").forEach(row=>{row.hidden=!row.dataset.search.includes(term);});
   });
   document.addEventListener("click",async(event)=>{
+    const clear=event.target.closest("[data-log-clear]");
+    if(clear){
+      const form=clear.closest("[data-log-search]");
+      for(const input of form.querySelectorAll(clear.dataset.logClear==="hosts"?"[data-log-host]":"[data-log-route]"))input.checked=false;
+      updateLogSelectors(form);
+      cache.filters=logQuery(form);
+      return;
+    }
+    const routeSummary=event.target.closest('[data-log-picker="routes"] > summary');
+    if(routeSummary?.getAttribute("aria-disabled")==="true"){event.preventDefault();return;}
     if(event.target.closest("[data-toast-close]")){feedback.replaceChildren();return;}
     const close=event.target.closest("[data-dismiss-dialog]");
     if(close){dialog.close();return;}

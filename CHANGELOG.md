@@ -1,3 +1,15 @@
+## October 11, 2026 — SPA log selectors and CRS update checks
+
+- Restored searchable, multi-select hosts and aliases in the SPA Logs filters,
+  with dependent multiple-route selections and inventory-validated scopes.
+- Persisted selected log scopes through SPA navigation and used identical
+  selections for both event searches and CSV/JSONL exports.
+- Opening OWASP now checks the official CRS release feed via authenticated
+  check-only JSON API, displays available updates, and never installs a release
+  without an explicit separate action.
+- Added scoped-query/forgery checks, no-install release-check API checks,
+  and SPA selector regression tests.
+
 ## October 11, 2026 — Full backup and restore in Server Settings
 
 - Added **Server Settings → Full Backup & Restore** with an authenticated SPA

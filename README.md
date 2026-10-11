@@ -88,7 +88,10 @@ and other plugins separately, allows editable plugin configuration with transact
 rollback, exposes core CRS rules through a searchable management dialog, and maintains
 custom rules and global exclusions. LiteEdge periodically checks the official OWASP CRS
 release feed, surfaces newer stable releases in the UI, and can download or manually
-import a CRS source bundle. Updated CRS releases are stored in persistent LiteEdge data
+import a CRS source bundle. Opening the SPA **OWASP** page also performs an
+asynchronous, authenticated check-only `GET /api/v1/owasp/crs/check` request.
+The displayed available version and update status refresh automatically without
+installing or downloading rules; clicking **Check updates** reruns that same check. Updated CRS releases are stored in persistent LiteEdge data
 and are staged, validated against NGINX and ModSecurity, and rolled back automatically
 if activation fails. OWASP configuration exports include an active managed CRS release.
 
@@ -398,8 +401,8 @@ continue matching as before. Test via `bash tests/test-alert-selectors.sh`.
 
 ### Inventory-backed log filters
 
-The **Logs** screen now uses the same multi-select host/alias and filtered route
-dropdowns as Alerts. Hostnames and aliases come from the configured site
+The **Logs** SPA uses searchable checkbox multi-selects for hosts/aliases
+and site-dependent routes, just as the previous interface did. Hostnames and aliases come from the configured site
 inventory. Route options are read from managed routes and migrated NGINX
 `location` blocks. Select multiple hostnames or aliases, then optionally
 restrict each selected host to one or more of its routes. Leaving host selection
@@ -407,6 +410,9 @@ blank means all hosts; leaving routes blank for a selected hostname includes
 all its requests. Matching uses actual request hostnames and either NGINX route
 labels or request URI prefix/exact/regex matches for imported routes.
 
+Selected hosts/aliases and routes remain selected across searches and SPA
+navigation. The SPA encodes them as an inventory-validated `scopes_json` array,
+using exactly the same filters for search results, CSV exports and JSONL exports.
 Filters persist across submissions and are applied server-side to the Logs
 screen, CSV downloads and JSONL downloads. The search-text field starts empty
 rather than showing a literal template variable; the browser saves filter

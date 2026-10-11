@@ -131,6 +131,20 @@ api_owasp() {
     --argjson custom "$custom" --argjson disabled "$disabled" --argjson registry "$registry" --argjson configs "$configs" \
     '{ok:true,pl:$pl,crs:($crs|split("\n")|map(select(length>0)|split("="))|map({key:.[0],value:(.[1:]|join("="))})|from_entries),installed:$installed,custom:$custom,disabled:$disabled,registry:$registry,plugin_configs:$configs}'
 }
+# Query the upstream release metadata and cache its version only. This
+# command never downloads a CRS archive, installs rules, or reloads NGINX.
+api_crs_check() {
+  local result
+  if ! result="$(/opt/liteedge/bin/crsctl.sh check 2>/dev/null)"; then
+    api_failure 502 'Unable to check the OWASP CRS release feed. Please retry.'
+  fi
+  api_headers
+  printf '%s
+' "$result" | jq -Rn '
+    [inputs | select(length>0) | capture("^(?<key>[^=]+)=(?<value>.*)$")] |
+    reduce .[] as $item ({}; .[$item.key]=$item.value) |
+    {ok:true,crs:.}'
+}
 api_crs_rules() {
   crs_rule_rows | jq -Rn '{ok:true,rules:[inputs | split("\t") | select(length>=4) |
     {id:.[0],source:.[1],pl:.[2],message:.[3]}]}'
@@ -225,7 +239,7 @@ api_entry() {
   # shellcheck disable=SC2317,SC2329
   redirect() { api_success '{"ok":true}'; }
   case "$endpoint" in
-    /api/v1/sites|/api/v1/site|/api/v1/server|/api/v1/alerts|/api/v1/owasp|/api/v1/catalog|/api/v1/logs|/api/v1/owasp/rules)
+    /api/v1/sites|/api/v1/site|/api/v1/server|/api/v1/alerts|/api/v1/owasp|/api/v1/catalog|/api/v1/logs|/api/v1/owasp/rules|/api/v1/owasp/crs/check)
       [[ "$method" == GET ]] || api_failure 405 'GET required.'
       case "$endpoint" in
         /api/v1/sites) api_headers; api_sites ;;
@@ -234,6 +248,7 @@ api_entry() {
         /api/v1/alerts) api_headers; api_alerts ;;
         /api/v1/owasp) api_headers; api_owasp ;;
         /api/v1/owasp/rules) api_headers; api_crs_rules ;;
+        /api/v1/owasp/crs/check) api_crs_check ;;
         /api/v1/catalog) api_headers; /opt/liteedge/bin/alert-catalog.sh ;;
         /api/v1/logs) api_logs ;;
       esac

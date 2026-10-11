@@ -27,6 +27,15 @@ for(const view of ["sites","site","server","alerts","owasp","logs"]){
 for(const name of ["site/save","route/add","route/save","server/save","server/smtp/save","collector/save","alerts/save","owasp/pl","config/save","password/change"]){
   assert(spa.includes(name),"UI action missing "+name);
 }
+assert.match(spa,/data-log-host/);
+assert.match(spa,/data-log-route/);
+assert.match(spa,/data-log-picker-search/);
+assert.match(spa,/scopes_json/);
+assert.match(spa,/checkCrsUpdates\(\)/);
+assert.match(spa,/api\("owasp\/crs\/check"\)/);
+assert.doesNotMatch(spa,/act\("owasp\/crs\/check"\)/);
+assert.match(api,/api_crs_check\(\)/);
+assert.match(api,/crsctl\.sh check/);
 assert.match(spa,/Full Backup & Restore/);
 assert.match(spa,/full-backup-download/);
 assert.match(spa,/full-backup-restore/);

@@ -46,6 +46,29 @@ for part in sites server alerts owasp catalog 'logs?type=http' owasp/rules; do
   grep -Fiq 'Cache-Control: no-store' "$HEADERS"
   json 'type=="object"'
 done
+# CRS release metadata checks use GET and are protected by Basic auth.
+expect 401 "$(request "$BASE/api/v1/owasp/crs/check")" 'CRS check requires authentication'
+expect 405 "$(request -u "admin:$PASS" -X POST "$BASE/api/v1/owasp/crs/check")" 'CRS check is GET-only'
+# Replace only the test container's release checker with a deterministic
+# read-only fixture, keeping the test independent of GitHub availability.
+docker exec -u 0 "$NAME" sh -c "cp /opt/liteedge/bin/crsctl.sh /tmp/crsctl-original.sh"
+docker exec -i -u 0 "$NAME" sh -c 'cat > /opt/liteedge/bin/crsctl.sh; chmod 755 /opt/liteedge/bin/crsctl.sh' <<'FAKE_CRS'
+#!/bin/sh
+case "$1" in
+  check)
+    touch /data/.test-crs-version-checked
+    printf 'CURRENT_VERSION=4.12.0\nSOURCE=bundled\nLATEST_VERSION=4.13.0\nCHECKED_AT=1790000000\nUPDATE_AVAILABLE=1\n'
+    ;;
+  install-latest)
+    touch /data/.test-crs-installed
+    exit 1
+    ;;
+  *) exec /bin/bash /tmp/crsctl-original.sh "$@" ;;
+esac
+FAKE_CRS
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/owasp/crs/check")" 'CRS version check metadata JSON'
+json '.ok==true and .crs.CURRENT_VERSION=="4.12.0" and .crs.LATEST_VERSION=="4.13.0" and .crs.UPDATE_AVAILABLE=="1"'
+docker exec "$NAME" sh -c 'test -f /data/.test-crs-version-checked && test ! -e /data/.test-crs-installed'
 expect 400 "$(request -u "admin:$PASS" "$BASE/api/v1/logs")" 'Unfiltered log queries are rejected'
 json '.ok==false'
 expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/logs?type=http")" 'Filtered logs return JSON'
@@ -64,6 +87,14 @@ json '.sites | any(.host=="test.example")'
 expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=test.example -d match=prefix -d path=/api/ -d target=http://127.0.0.1:12001 -d backends=http://127.0.0.1:12002 "$BASE/api/v1/actions/route/add")" 'API route creation'
 expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site?host=test.example")" 'Site detail'
 json '.site.routes[0].target=="http://127.0.0.1:12001" and .site.routes[0].backends=="http://127.0.0.1:12002"'
+expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=second.example -d aliases=www.second.example "$BASE/api/v1/actions/site/save")" 'Create second site for scope selection'
+scopes='[{"host":"test.example","site":"test.example","routes":["prefix:/api/"]},{"host":"www.second.example","site":"second.example","routes":[]}]'
+expect 200 "$(request -u "admin:$PASS" -G --data-urlencode "type=all" --data-urlencode "scopes_json=$scopes" "$BASE/api/v1/logs")" 'Multi-host alias and route scope query'
+json '.ok==true and (.events|type)=="array"'
+expect 400 "$(request -u "admin:$PASS" -G --data-urlencode 'scopes_json=[{"host":"forged.example","site":"test.example","routes":[]}]' "$BASE/api/v1/logs")" 'Forged log scope rejected'
+json '.ok==false'
+expect 200 "$(request -u "admin:$PASS" -G --data-urlencode "format=jsonl" --data-urlencode "apply=1" --data-urlencode "scopes_json=$scopes" "$BASE/api/v1/logs/export")" 'Multi-select log export uses same scope query'
+
 expect 400 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=bad/site "$BASE/api/v1/actions/site/save")" 'Invalid input JSON error'
 json '.ok==false and (.error|length>0)'
 expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d smtp_host=smtp.test.example -d smtp_port=587 -d mail_from=alerts@example.org -d smtp_user=notifier -d smtp_password=fixture-secret "$BASE/api/v1/actions/server/smtp/save")" 'SMTP API save'
