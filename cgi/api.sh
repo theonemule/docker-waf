@@ -184,9 +184,9 @@ api_entry() {
   # Reuse the validated command handlers but replace HTML/redirect semantics
   # with JSON statuses. Clients never parse HTML or follow mutation redirects.
   # Called dynamically by the sourced legacy handler, rather than in this file.
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   error_page() { api_failure 400 "$1"; }
-  # shellcheck disable=SC2329
+  # shellcheck disable=SC2317,SC2329
   redirect() { api_success '{"ok":true}'; }
   case "$endpoint" in
     /api/v1/sites|/api/v1/site|/api/v1/server|/api/v1/alerts|/api/v1/owasp|/api/v1/catalog|/api/v1/logs|/api/v1/owasp/rules)
