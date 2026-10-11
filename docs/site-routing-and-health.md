@@ -12,6 +12,8 @@ The **Sites** list displays the status of each host.
   site responds with HTTP **503 Service Unavailable**, including its routes.
   Hostnames, aliases, route settings, WAF policies, and certificates remain saved.
 - Click **Enable** to restore the previous configuration.
+- The page remains in context: toggling from the Sites overview returns to
+  the overview, while toggling from Manage returns to the same site editor.
 - **Delete** is a different action and removes saved site settings.
   Sites are enabled by default.
 

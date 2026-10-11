@@ -43,7 +43,7 @@ done
 get() { curl --noproxy '*' -ks --connect-timeout 3 --max-time 15 -u "admin:$PASS" -o "$RESP" -w '%{http_code}' "$URL$1"; }
 post() {
   local path="$1"; shift
-  curl --noproxy '*' -ks --connect-timeout 3 --max-time 20 -u "admin:$PASS"     -X POST -o "$RESP" -w '%{http_code}' "$URL$path" "$@"
+  curl --noproxy '*' -ks --connect-timeout 3 --max-time 20 -u "admin:$PASS"     -X POST -D "$TEMP/post-headers" -o "$RESP" -w '%{http_code}' "$URL$path" "$@"
 }
 assert_code() {
   local wanted="$1" actual="$2" label="$3"
@@ -61,6 +61,15 @@ assert_body() {
 must_redirect() {
   local name="$1"; shift
   assert_code 303 "$(post "$name" "$@")" "POST $name"
+}
+assert_redirect_location() {
+  local expected="$1"
+  tr -d '\r' < "$TEMP/post-headers" | grep -Fxq "Location: $expected" || {
+    echo "FAIL: expected redirect to $expected" >&2
+    cat "$TEMP/post-headers" >&2
+    exit 1
+  }
+  count=$((count+1))
 }
 # Security / auth / method contracts.
 assert_code 401 "$(curl --noproxy '*' -ks -o "$RESP" -w '%{http_code}' "$URL/admin/logs")" 'Unauthenticated logs'
@@ -136,10 +145,27 @@ assert_body 'Unsupported export format'
 
 # Real CRUD against disposable persistent state.
 must_redirect /admin/site/save -d 'host=example.test' -d 'aliases=alias.example.test'
-must_redirect /admin/site/disable -d 'host=example.test'
+assert_code 200 "$(get /)" 'Sites overview renders context-aware toggle'
+assert_body 'name="return_to" value="overview"'
+assert_code 200 "$(get '/admin/site?host=example.test')" 'Site editor renders context-aware toggle'
+assert_body 'name="return_to" value="site"'
+# The source view must be preserved for BOTH enable and disable actions.
+must_redirect /admin/site/disable -d 'host=example.test' -d 'return_to=overview'
+assert_redirect_location '/'
 docker exec "$NAME" sh -c 'grep -qx ENABLED=0 /data/sites/example.test.site'
-must_redirect /admin/site/enable -d 'host=example.test'
+must_redirect /admin/site/enable -d 'host=example.test' -d 'return_to=overview'
+assert_redirect_location '/'
 docker exec "$NAME" sh -c 'grep -qx ENABLED=1 /data/sites/example.test.site'
+must_redirect /admin/site/disable -d 'host=example.test' -d 'return_to=site'
+assert_redirect_location '/admin/site?host=example.test'
+must_redirect /admin/site/enable -d 'host=example.test' -d 'return_to=site'
+assert_redirect_location '/admin/site?host=example.test'
+# Untrusted URL values never become redirect targets; old API clients still
+# default to the existing site-editor destination.
+must_redirect /admin/site/disable -d 'host=example.test' -d 'return_to=https://attacker.example/'
+assert_redirect_location '/admin/site?host=example.test'
+must_redirect /admin/site/enable -d 'host=example.test'
+assert_redirect_location '/admin/site?host=example.test'
 docker exec "$NAME" sh -c 'test -s /data/sites/example.test.site'
 must_redirect /admin/route/add -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:12345' -d 'timeout=60'
 docker exec "$NAME" sh -c 'grep -Rl "^PATH=/api/$" /data/sites/example.test.routes/*.route >/dev/null'

@@ -93,7 +93,9 @@ Disable site**. The site stays in the inventory, its routes and TLS certificates
 retained, and requests receive HTTP 503. The button then changes to **Enable**;
 select it to restore the saved routing configuration. Disabling also affects the
 site's HTTP-01 challenge paths, so re-enable the site before renewing its TLS
-certificate. Newly created and existing sites are enabled by default.
+certificate. Newly created and existing sites are enabled by default. After
+an Enable/Disable action, the UI returns to the same view you used: the Sites
+overview stays on the overview, and an individual site editor stays on that site.
 
 ### Configure multiple backends and health checks
 

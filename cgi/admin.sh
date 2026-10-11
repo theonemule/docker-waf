@@ -228,7 +228,7 @@ HTML
       tls="$(cert_mode "$host")"
       enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
       cat <<HTML
-<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)" type="submit">$([[ "$enabled" == 1 ]] && echo Disable || echo Enable)</button></form> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
+<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="return_to" value="overview"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)" type="submit">$([[ "$enabled" == 1 ]] && echo Disable || echo Enable)</button></form> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
 HTML
     done
   fi
@@ -258,7 +258,7 @@ HTML
     file="$(site_file "$host")"
     enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
     cat <<HTML
-<div class="d-flex align-items-center gap-3 mb-3"><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span><form method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)">$([[ "$enabled" == 1 ]] && echo 'Disable site' || echo 'Enable site')</button></form><span class="text-secondary small">Disabling returns HTTP 503 without deleting routes or certificates.</span></div>
+<div class="d-flex align-items-center gap-3 mb-3"><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span><form method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="return_to" value="site"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)">$([[ "$enabled" == 1 ]] && echo 'Disable site' || echo 'Enable site')</button></form><span class="text-secondary small">Disabling returns HTTP 503 without deleting routes or certificates.</span></div>
 HTML
     routes_panel "$host"
     certificate_panel "$host"
@@ -1388,7 +1388,13 @@ handle_post() {
     /admin/site/enable|/admin/site/disable)
       host="${PARAM[host]:-}"
       run_or_error /opt/liteedge/bin/sitectl.sh "${path##*/}" "$host"
-      redirect "/admin/site?host=$host"
+      # Return to the caller's page; only an allowlisted context is accepted.
+      # Keep the site editor as the default for legacy API clients.
+      if [[ "${PARAM[return_to]:-site}" == overview ]]; then
+        redirect "/"
+      else
+        redirect "/admin/site?host=$host"
+      fi
       ;;
 
     /admin/site/delete)
