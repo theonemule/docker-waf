@@ -54,6 +54,7 @@ jq
 socat
 logrotate
 libcap
+python3
 tar
 gzip
 findutils

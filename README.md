@@ -8,23 +8,23 @@ versioned JSON API, and shell-based control plane.
 
 The original v1/v2 repository is preserved unchanged on the `legacy-v1-v2` branch.
 
-### SPA and versioned JSON API (feature branch, not deployed)
+### SPA and versioned JSON API
 
-A work-in-progress branch replaces the management-page postbacks and full-page
-reloads with a static single-page interface and a versioned, HTTP Basic
-protected JSON API. The UI uses authenticated JavaScript `fetch` calls for
-reads, mutations, imports and exports, and hash routing for in-page navigation.
-It preserves the existing Bash configuration backend and legacy command/API
-compatibility. See [SPA/API architecture and verification](docs/spa-api.md).
-**This refactor is not installed on production and must not be released
-without review and testing.**
+The LiteEdge management interface is a single-page application with an
+HTTP Basic-protected, versioned JSON API. It uses JavaScript `fetch` for
+navigation data, mutations, imports, exports, and full backup/restore without
+form postbacks or full-page reloads. See [SPA/API architecture](docs/spa-api.md).
+**Server Settings → Full Backup & Restore** downloads a complete archive of
+persistent configuration and certificates, excluding logs, or validates and
+restores that archive with automatic rollback on NGINX validation failure.
+See [full backup and restore](docs/full-backup-restore.md).
 
 Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
 multi-backend sites and alerting on health checks, see
 [Site routing and health operations](docs/site-routing-and-health.md).
 
 For offline physical-server installation, see the [minimal bare-metal ISO guide](docs/bare-metal-installer.md). The release includes full binaries plus separate bootable VM and bare-metal ISOs.
-The undeployed SPA/API refactor is documented in [SPA and API architecture](docs/spa-api.md).
+
 
 The distributable product is a pre-built Alpine/musl release bundle. The same
 bundle is consumed by both the hardened Docker image and the standalone Alpine
@@ -35,12 +35,12 @@ The management plane is intentionally small:
 - Alpine Linux runtime
 - NGINX built from source with the ModSecurity-nginx connector compiled in
 - libModSecurity with Lua 5.3 scripting support plus OWASP Core Rule Set
-- Bash shell scripts only for application logic
+- Bash command/control scripts plus a narrowly scoped Python 3 backup/archive utility
 - fcgiwrap to expose shell CGI behind NGINX
 - HTTP Basic Authentication using an OpenSSL SHA-512 password hash
 - Bootstrap 5.3.8 CSS pinned and verified during the appliance build
 - Flat-file persistent configuration
-- No Node.js, Python, PHP, database, or application framework
+- No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
 ## Release contents
 

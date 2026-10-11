@@ -1,6 +1,6 @@
 # LiteEdge SPA and versioned API
 
-Status: implementation on a feature branch; not deployed.
+Status: deployed SPA with authenticated, versioned API.
 
 ## Before and after
 
@@ -25,6 +25,8 @@ The new JSON endpoints are protected read and management resources.
 | GET | /api/v1/logs/export?... | Binary CSV/JSONL download |
 | GET | /api/v1/export?... | Binary site/configuration export |
 | GET | /api/v1/owasp/export | Binary OWASP export |
+| GET | /api/v1/backup/export | Full configuration backup excluding logs (gzip archive) |
+| POST | /api/v1/backup/restore | Validated full restore with log preservation and rollback |
 | POST | /api/v1/actions/{operation} | Existing validated management mutations |
 | POST | /api/v1/import | Binary site configuration import |
 | POST | /api/v1/owasp/import | Binary WAF configuration import |
@@ -63,4 +65,5 @@ The new API integration test verifies authentication, JSON contracts, authorizat
 
 A Chrome browser test confirmed six SPA views, JSON resource retrieval, and the backend editor interactions without document reloads. The test observed a single document request during navigation.
 
-The changes are isolated on a feature branch. Do not merge, deploy, or alter the production Docker image without separate authorization.
+The live deployment uses the SPA/API. Full configuration backup and restore
+is available in **Server Settings** and documented in [full backup and restore](full-backup-restore.md).

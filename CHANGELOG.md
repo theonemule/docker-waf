@@ -1,3 +1,17 @@
+## October 11, 2026 — Full backup and restore in Server Settings
+
+- Added **Server Settings → Full Backup & Restore** with an authenticated SPA
+  download and a validated restore action, without full-page postbacks.
+- Captures all persistent `/data` configuration including sites, imported
+  routes, WAF rules, ACME/certificate private keys, admin authentication,
+  alert rules, collector and SMTP settings, and static website files.
+  Explicitly excludes access/security/event logs and log-processing cursors.
+- Restores through a checked archive manifest with file SHA-256 hashes,
+  traversal/symlink protection, size limits, confirmation, NGINX validation,
+  and automatic rollback if activation fails. Logs remain untouched.
+- Added disposable end-to-end restore regression tests and bundled Python 3
+  with the Docker, Alpine and offline VM/bare-metal installer distributions.
+
 ## October 11, 2026 — Offline bare-metal ISO and bundled release
 
 - Added a separate, **minimal x86-64 bare-metal ISO** with the Alpine LTS

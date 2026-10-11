@@ -22,7 +22,7 @@ profile_liteedge() {
         fcgiwrap spawn-fcgi
         pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb
         coreutils diffutils patch lua5.3-libs jq socat logrotate libcap
-        tar gzip findutils"
+        python3 tar gzip findutils"
     apkovl="genapkovl-liteedge.sh"
 }
 
@@ -49,6 +49,6 @@ profile_liteedge_baremetal() {
         fcgiwrap spawn-fcgi
         pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb
         coreutils diffutils patch lua5.3-libs jq socat logrotate libcap
-        tar gzip findutils"
+        python3 tar gzip findutils"
     apkovl="genapkovl-liteedge.sh"
 }

@@ -6,7 +6,7 @@ FROM ${ALPINE_REGISTRY}:${ALPINE_VERSION}@${ALPINE_DIGEST}
 
 ARG LITEEDGE_ARCH=x86_64
 
-RUN apk add --no-cache bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate && addgroup -g 10001 -S liteedge && adduser -S -D -H -u 10001 -G liteedge liteedge && mkdir -p /data && chown 10001:10001 /data
+RUN apk add --no-cache python3 bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate && addgroup -g 10001 -S liteedge && adduser -S -D -H -u 10001 -G liteedge liteedge && mkdir -p /data && chown 10001:10001 /data
 
 COPY dist/liteedge-linux-musl-${LITEEDGE_ARCH}.tar.gz /tmp/liteedge.tar.gz
 COPY dist/liteedge-linux-musl-${LITEEDGE_ARCH}.tar.gz.sha256 /tmp/liteedge.tar.gz.sha256

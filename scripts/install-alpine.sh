@@ -49,7 +49,7 @@ esac
 # installs them from its signed, on-media APK repository during setup-disk.
 # On first boot the ISO is removed, so the installer must never use a network
 # repository or download a GitHub release in offline mode.
-RUNTIME_PACKAGES="bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc"
+RUNTIME_PACKAGES="python3 bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc"
 if [ -n "$OFFLINE_DIR" ]; then
   [ -d "$OFFLINE_DIR" ] || { echo "Offline directory missing: $OFFLINE_DIR" >&2; exit 1; }
   for package in $RUNTIME_PACKAGES; do

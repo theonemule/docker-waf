@@ -241,6 +241,9 @@
         +field("Collector endpoint","url",c.url||"","url")
         +field("API token (blank keeps saved token)","token","","password","autocomplete=new-password")
         +'</div>',"Save export configuration"))
+      +card("Full Backup & Restore",'<p>Download all persistent LiteEdge configuration, sites, certificates, authentication, WAF rules, imported configuration, and alert settings. <strong>Logs are excluded.</strong></p>'
+        +'<p class="small text-warning-emphasis">The archive includes private keys and administrator authentication data. Keep it secure. Restoring replaces the current saved configuration and may require signing in again; existing logs remain untouched.</p>'
+        +rowActions([{op:"full-backup-download",label:"Download full backup"},{op:"full-backup-restore",label:"Restore from backup",danger:true}]))
       +card("Administrator password",form("password/change",'<div class="spa-form-grid">'
         +field("Current password","current_password","","password","required autocomplete=current-password")
         +field("New password","new_password","","password","minlength=10 required autocomplete=new-password")
@@ -433,6 +436,17 @@
     const host=el.dataset.host||cache.site?.host;
     const id=el.dataset.id;
     switch(op){
+      case "full-backup-download":
+        await transfer("backup/export","liteedge-full-backup.tar.gz");
+        toast("Full backup downloaded. Store it securely; it contains private keys and authentication data.");
+        break;
+      case "full-backup-restore":
+        modal("Restore full backup",'<p class="alert alert-warning">This will <strong>replace all current saved LiteEdge configuration</strong>, including sites, certificates, authentication, and WAF settings. Existing logs will not be changed. The restored administrator password may be different.</p>'
+          +'<form data-full-backup-restore>'
+          +field("Select LiteEdge full backup archive","archive","","file","required accept=\".tar.gz,.tgz,application/gzip\"")
+          +field("Type RESTORE to confirm","confirmation","","text","required autocomplete=off")
+          +'<button type="submit" class="btn btn-danger mt-3">Validate and restore backup</button></form>');
+        break;
       case "add-site":
         modal("Add site",form("site/save",'<div class="spa-form-grid">'
           +field("Hostname","host","","text","required")
@@ -568,6 +582,29 @@
     if(!formEl.matches("form"))return;
     // Every application form is handled here. No native HTML postbacks.
     event.preventDefault();
+    if(formEl.matches("[data-full-backup-restore]")){
+      if(formEl.querySelector('[name="confirmation"]').value !== "RESTORE") {
+        toast("Type RESTORE exactly to confirm replacing the saved configuration.","danger");
+        return;
+      }
+      const button=formEl.querySelector('button[type="submit"]');
+      button.disabled=true;
+      const original=button.textContent;
+      button.textContent="Validating and restoring…";
+      try {
+        const file=formEl.querySelector('[name="archive"]').files[0];
+        await upload("backup/restore",file);
+        dialog.close();
+        toast("Full backup restored successfully. Your credentials may have changed.");
+        await refresh();
+      } catch(error) {
+        toast(error.message||String(error),"danger");
+      } finally {
+        button.disabled=false;
+        button.textContent=original;
+      }
+      return;
+    }
     if(formEl.matches("[data-log-search]")){
       try{await searchLogs();}catch(err){toast(err.message,"danger");}
       return;

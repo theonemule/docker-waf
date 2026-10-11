@@ -102,7 +102,7 @@ install -m 0644 "$ROOT/nginx/admin-http.conf" "$PREFIX/etc/nginx/admin-http.conf
 install -m 0644 "$ROOT/nginx/security.conf" "$PREFIX/etc/nginx/security.conf"
 install -m 0644 "$ROOT/nginx/modsecurity.conf" "$PREFIX/etc/nginx/modsecurity-main.conf.template"
 install -m 0644 "$ROOT/nginx/modsecurity-wordpress.conf" "$PREFIX/etc/nginx/modsecurity-wordpress.conf.template"
-chmod 0755 "$PREFIX"/bin/*.sh "$PREFIX"/cgi/*.sh "$PREFIX"/entrypoint.sh "$PREFIX"/bin/dehydrated
+chmod 0755 "$PREFIX"/bin/*.py "$PREFIX"/bin/*.sh "$PREFIX"/cgi/*.sh "$PREFIX"/entrypoint.sh "$PREFIX"/bin/dehydrated
 install -d -m 0755 "$PREFIX/share/openrc"
 install -m 0755 "$ROOT/packaging/openrc/liteedge" "$PREFIX/share/openrc/liteedge"
 install -m 0755 "$ROOT/scripts/install-alpine.sh" "$PREFIX/share/install-alpine.sh"
@@ -151,6 +151,8 @@ lua5.3-libs
 jq
 socat
 logrotate
+libcap
+python3
 EOF_RUNTIME
 {
   cat "$ROOT/build/versions.env"

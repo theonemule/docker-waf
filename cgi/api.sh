@@ -147,6 +147,42 @@ api_logs() {
   api_headers
   printf '%s\n' "$output" | jq -sc '{ok:true,events:.}'
 }
+api_full_backup_export() {
+  local temp filename
+  temp="$(mktemp -d "$DATA_DIR/.liteedge-backup-export.XXXXXXXX")" || api_failure 500 'Unable to stage backup.'
+  chmod 700 "$temp"
+  filename="liteedge-full-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
+  if ! /opt/liteedge/bin/backupctl.py backup "$temp/$filename" > "$temp/result.json" 2> "$temp/error"; then
+    rm -rf "$temp"
+    api_failure 500 'Unable to create full backup.'
+  fi
+  printf 'Content-Type: application/gzip\r\n'
+  printf 'Content-Disposition: attachment; filename="%s"\r\n' "$filename"
+  printf 'Content-Length: %s\r\n' "$(wc -c < "$temp/$filename" | tr -d ' ')"
+  printf 'Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
+  cat "$temp/$filename"
+  rm -rf "$temp"
+  exit 0
+}
+api_full_backup_restore() {
+  local length="${CONTENT_LENGTH:-0}" temp result error
+  [[ "$length" =~ ^[0-9]+$ ]] || api_failure 400 'Invalid Content-Length.'
+  (( length > 0 && length <= 268435456 )) || api_failure 413 'Backup must be no larger than 256 MiB.'
+  temp="$(mktemp -d "$DATA_DIR/.liteedge-backup-upload.XXXXXXXX")" || api_failure 500 'Unable to stage upload.'
+  chmod 700 "$temp"
+  head -c "$length" > "$temp/archive.tar.gz"
+  if [[ "$(wc -c < "$temp/archive.tar.gz" | tr -d ' ')" != "$length" ]]; then
+    rm -rf "$temp"
+    api_failure 400 'Incomplete backup upload.'
+  fi
+  if ! result="$(/opt/liteedge/bin/backupctl.py restore "$temp/archive.tar.gz" 2> "$temp/error")"; then
+    error="$(head -c 600 "$temp/error")"
+    rm -rf "$temp"
+    api_failure 400 "Restore failed: $error"
+  fi
+  rm -rf "$temp"
+  api_success "$result"
+}
 api_authz_mutation() {
   [[ "${HTTP_X_LITEEDGE_API:-}" == 1 ]] || api_failure 403 'Mutation requires X-LiteEdge-API: 1.'
   case "${HTTP_SEC_FETCH_SITE:-same-origin}" in same-origin|none) ;; *) api_failure 403 'Cross-site mutation denied.' ;; esac
@@ -211,6 +247,13 @@ api_entry() {
       handle_post "/admin/${endpoint#/api/v1/actions/}"
       api_failure 500 'Handler returned without an API result.'
       ;;
+    /api/v1/backup/export)
+      [[ "$method" == GET ]] || api_failure 405 'GET required.'
+      api_full_backup_export ;;
+    /api/v1/backup/restore)
+      [[ "$method" == POST ]] || api_failure 405 'POST required.'
+      api_authz_mutation
+      api_full_backup_restore ;;
     /api/v1/export)
       [[ "$method" == GET ]] || api_failure 405 'GET required.'
       handle_export ;;
