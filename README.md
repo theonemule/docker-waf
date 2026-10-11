@@ -3,10 +3,28 @@
 Docker WAF v3 is the appliance generation of the original `theonemule/docker-waf`
 project. The appliance is named LiteEdge and is a lightweight reverse proxy and web
 application firewall built around NGINX, ModSecurity, and the OWASP Core Rule Set.
-It replaces the fixed demo proxy with a Bootstrap management UI and shell-only
-control plane.
+It replaces the fixed demo proxy with a JavaScript single-page management UI,
+versioned JSON API, and shell-based control plane.
 
 The original v1/v2 repository is preserved unchanged on the `legacy-v1-v2` branch.
+
+### SPA and versioned JSON API
+
+The LiteEdge management interface is a single-page application with an
+HTTP Basic-protected, versioned JSON API. It uses JavaScript `fetch` for
+navigation data, mutations, imports, exports, and full backup/restore without
+form postbacks or full-page reloads. See [SPA/API architecture](docs/spa-api.md).
+**Server Settings → Full Backup & Restore** downloads a complete archive of
+persistent configuration and certificates, excluding logs, or validates and
+restores that archive with automatic rollback on NGINX validation failure.
+See [full backup and restore](docs/full-backup-restore.md).
+
+Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
+multi-backend sites and alerting on health checks, see
+[Site routing and health operations](docs/site-routing-and-health.md).
+
+For offline physical-server installation, see the [minimal bare-metal ISO guide](docs/bare-metal-installer.md). The release includes full binaries plus separate bootable VM and bare-metal ISOs.
+
 
 The distributable product is a pre-built Alpine/musl release bundle. The same
 bundle is consumed by both the hardened Docker image and the standalone Alpine
@@ -17,12 +35,12 @@ The management plane is intentionally small:
 - Alpine Linux runtime
 - NGINX built from source with the ModSecurity-nginx connector compiled in
 - libModSecurity with Lua 5.3 scripting support plus OWASP Core Rule Set
-- Bash shell scripts only for application logic
+- Bash command/control scripts plus a narrowly scoped Python 3 backup/archive utility
 - fcgiwrap to expose shell CGI behind NGINX
 - HTTP Basic Authentication using an OpenSSL SHA-512 password hash
 - Bootstrap 5.3.8 CSS pinned and verified during the appliance build
 - Flat-file persistent configuration
-- No Node.js, Python, PHP, database, or application framework
+- No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
 ## Release contents
 
@@ -33,7 +51,8 @@ Each release asset contains the complete LiteEdge runtime under /opt/liteedge:
 - OWASP Core Rule Set
 - dehydrated ACME client
 - LiteEdge shell control/API scripts
-- CGI management UI
+- Versioned JSON management API exposed through CGI
+- Static single-page management interface (HTML, JavaScript, and Bootstrap)
 - Bootstrap assets
 - NGINX and ModSecurity templates
 - OpenRC service definition
@@ -42,14 +61,25 @@ Each release asset contains the complete LiteEdge runtime under /opt/liteedge:
 
 The source build is pinned in build/versions.env. scripts/build-release.sh
 performs a serial Alpine build by default so it also works on small build hosts.
-The release workflow publishes the generated tarball and SHA-256 checksum for
-version tags.
+The release workflow publishes the generated tarball, SHA-256 checksum,
+version-bound Docker installer, and Compose file with checksum for version tags.
+Currently, release assets and the runtime image target x86_64 only; Alpine
+aarch64 installation is rejected until native aarch64 assets are published.
 
 ## Features
 
 Each virtual host defines its host name and aliases, while reverse-proxy behavior is
 owned by its routes. Routes support prefix, exact, and regex matches, separate upstream
 URLs, WebSocket upgrades, timeouts, and HTTP-to-HTTPS redirection.
+
+Each site can be temporarily **disabled and re-enabled** without deleting its routes,
+certificates, or settings. Route creation and editing use dialogs instead of large
+inline editors. A route can use a single backend or an NGINX upstream pool with
+round-robin, least-connections, client-IP hashing, or cookie-based affinity.
+Optional HTTP health probes emit backend-down/recovered events for Logs and Alerts.
+Active probes **monitor and notify**, while open-source NGINX performs **passive**
+upstream failure handling. See [Site routing and health operations](docs/site-routing-and-health.md)
+for configuration, defaults, alert recipes, and limitations.
 
 OWASP CRS policy is route-scoped. Each route can enable or disable the WAF, select
 PL1 through PL4, select installed CRS plugins and application rule-exclusion plugins,
@@ -71,13 +101,62 @@ Each host supports three certificate modes:
 Let's Encrypt certificates are checked twice daily by a small shell renewal loop.
 No cron daemon or systemd is required inside the container.
 
+### Temporarily disable a site
+
+Open **Sites** and select **Disable** next to a hostname, or use **Manage →
+Disable site**. The site stays in the inventory, its routes and TLS certificates are
+retained, and requests receive HTTP 503. The button then changes to **Enable**;
+select it to restore the saved routing configuration. Disabling also affects the
+site's HTTP-01 challenge paths, so re-enable the site before renewing its TLS
+certificate. Newly created and existing sites are enabled by default. After
+an Enable/Disable action, the UI returns to the same view you used: the Sites
+overview stays on the overview, and an individual site editor stays on that site.
+
+### Configure multiple backends and health checks
+
+Open **Sites → Manage → Routes → Configure** to edit a route in a modal
+(or **Add route** to create one). All backend endpoints appear as individual
+URL rows within **Backend pool**. Click **Add backend** to insert another row
+or **Remove** beside any endpoint. There is no separate primary-target input
+or multi-line URL text box. Choose a load-balancing method, passive failure
+threshold and timeout. Pools support up to 16 endpoints with matching base
+paths, and single-backend routes keep their existing behavior.
+
+The same dialog offers an optional active HTTP health probe. Its defaults are
+a `/health` path, expected HTTP `200`, 30-second interval, 5-second
+request timeout, three consecutive failures to declare down, two successes
+to declare recovered, and a 300-second notification cooldown. Checks are
+off by default. The worker records changes as `health` events; configure
+a **Backend health** alert with action **Backend down**, threshold 1, and
+a notification destination to receive an outage alert. Action **Recovered**
+can notify on recovery.
+
+**Active probe results do not automatically remove endpoints from NGINX's
+upstream rotation.** Passive NGINX `max_fails` and `fail_timeout` settings
+handle request-time failure exclusion. This distinction is documented in
+[Site routing and health operations](docs/site-routing-and-health.md).
+
+For offline physical-server installation, see the [minimal bare-metal ISO guide](docs/bare-metal-installer.md). The release includes full binaries plus separate bootable VM and bare-metal ISOs.
+
 ## Docker install
 
 Clone the repository and run:
 
     git clone https://github.com/theonemule/docker-waf.git
-    cd LiteEdge
+    cd docker-waf
     ./install.sh
+
+Alternatively, download `install-docker.sh` from a v3 GitHub Release into an
+empty directory and run it with Bash (downloads do not retain executable
+permissions):
+
+    bash install-docker.sh
+
+To run it directly with `./install-docker.sh`, first use
+`chmod +x install-docker.sh`. It downloads and verifies the matching release's
+`docker-compose.yml` before installing. Released installers default to their
+own versioned image tag; repository checkouts default to `latest`. Set
+`LITEEDGE_REPO=OWNER/REPO` to use a different GHCR repository and release source.
 
 On first run the installer creates .env, generates a random admin password,
 prepares the persistent data directory for the unprivileged container user, pulls
@@ -85,11 +164,14 @@ prepares the persistent data directory for the unprivileged container user, pull
 
 Open:
 
-    https://SERVER_IP/
+    https://127.0.0.1:8443/
 
-Requests to the management listener over HTTP are redirected to HTTPS before Basic
-Auth credentials are requested. The initial HTTPS management certificate is
-self-signed. Use the Basic Auth credentials printed by install.sh.
+The web proxy uses public ports 80/443; administration is **not available on
+those ports**. Admin HTTPS binds only to loopback by default. For private LAN
+access, set `LITEEDGE_ADMIN_BIND_IP=10.0.1.2` (use the actual appliance LAN IP)
+in `.env` and restart the Compose service. Never forward the admin port from
+an internet router. The initial admin certificate is self-signed and Basic Auth
+credentials are provided by the installer.
 
 To enable Let's Encrypt, edit .env and set:
 
@@ -107,8 +189,9 @@ port 80 must be reachable from the Internet.
 The Compose deployment runs LiteEdge as UID/GID 10001, uses a read-only root
 filesystem, drops all Linux capabilities, enables no-new-privileges, sets a PID
 limit, and provides only /data plus a small /tmp tmpfs as writable storage.
-NGINX listens on unprivileged container ports 8080 and 8443, which are mapped to
-host ports 80 and 443. The CGI worker runs as the same unprivileged LiteEdge user.
+NGINX listens on container ports 8080 (website HTTP), 8443 (website HTTPS),
+and 9443 (admin HTTPS), mapped to public host ports 80/443 and private host
+8443 respectively. The CGI worker runs as the same unprivileged LiteEdge user.
 
 ## Standalone Alpine install
 
@@ -141,8 +224,9 @@ In Docker, persistent state is under the ./data bind mount:
       sites/      host and route definitions
       certs/      active host certificates
       acme/       ACME account, challenges, and issued certificates
-      logs/       certificate renewal logs
-      nginx/      generated runtime NGINX configuration
+      logs/       access events, WAF audit, probe/worker and certificate renewal logs
+      observability/ alert rules, sink settings, cursors and probe health state
+      nginx/      generated runtime NGINX configuration and upstream pools
       waf/        CRS defaults, registry cache, plugins, and custom rules
       www/        local static site content
 
@@ -162,13 +246,21 @@ The UI calls the same scripts that can be used manually inside the container:
     /opt/liteedge/bin/sitectl.sh route-add \
       app.example.com prefix /socket/ http://socket:9000 1
 
+    /opt/liteedge/bin/sitectl.sh disable app.example.com
+    /opt/liteedge/bin/sitectl.sh enable app.example.com
+
     /opt/liteedge/bin/certctl.sh selfsigned app.example.com
     /opt/liteedge/bin/certctl.sh letsencrypt app.example.com
 
 ## Security model
 
-The management UI is protected by NGINX HTTP Basic Auth over HTTPS. HTTP requests to
-the management listener are redirected before authentication. The UI uses no
+The management UI and all versioned API endpoints are protected by Basic Auth
+on a separate HTTPS listener. Client-side navigation stays within the same
+page and uses authenticated JSON API requests rather than form postbacks.
+Administrators' Basic credentials remain browser-managed, not JavaScript-stored.
+Mutation APIs require an explicit custom header and same-origin browser context.
+Unknown public HTTP hostnames receive 404 and unknown public HTTPS SNI is rejected.
+The browser-side UI doesn't depend on inline styles or inline scripts. The UI uses no
 client-side application framework and loads its Bootstrap stylesheet locally.
 
 Generated NGINX configuration receives baseline security headers. Route WAF policies
@@ -243,3 +335,239 @@ Successful `main` builds publish the container to:
 
 Tags matching `v3.*` publish the matching immutable container tag and attach the
 standalone appliance bundle and installers to a GitHub Release.
+## Logs, alert rules and collection
+
+The **Logs** page combines structured NGINX access events, normalized ModSecurity
+rule matches, and optional health probe state-change events. Events include
+timestamp, hostname, route match/pattern, external listener port, internal listener and upstream address (including backend port),
+HTTP method/status, path, client IP, request ID and WAF rule/message/disposition.
+Filter by hostname, route, method, HTTP status or status class (2xx–5xx), port,
+free-text, and Unix timestamp. Download up to 1,000 filtered events as JSONL or
+CSV; the view also searches up to seven compressed rotated log archives.
+Only the URI path is collected from NGINX; query strings, request/response bodies,
+credentials and cookies are not copied into centralized JSON event logs.
+
+The **Alerts** page defines conditions over HTTP, WAF, and backend-health events
+with event-count thresholds, rolling windows and cooldown periods. Each rule
+delivers to an HTTPS webhook or SMTP email. WAF prevention is done by the OWASP CRS intervention engine,
+not by ad-hoc alert scripts. Rule matches and blocked decisions appear in the Logs
+screen. The exporter/notification worker runs independently of NGINX so a failed
+collector doesn't interrupt the reverse proxy. Health probes run in a
+separate Bash worker (`health-worker.sh`), and store failure/recovery state
+under `/data/observability/health`. Probe transitions are logged in
+`/data/logs/events.jsonl`; worker diagnostics go to
+`/data/logs/health-worker.log`.
+
+**Server Settings → Log Export** configures one external sink, either RFC 5424 syslog
+(UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
+Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP for email
+alerts separately in **Server Settings → SMTP email for alerts**. Set an SMTP
+hostname, STARTTLS port (default 587), sender address, optional username,
+and password, then save. The SMTP form preserves an existing password when left
+blank; saving log export configuration cannot clear the SMTP setup.
+Log Export has its own Save button on Server Settings. The old
+`/admin/collector` URL redirects to that section, and saving export settings
+returns to it. Server Settings appears last in the sidebar.
+Tokens and SMTP passwords are stored in mode 0600 files
+under `/data/observability` and never displayed in the form after saving.
+Events live under `/data/logs/events.jsonl`; ModSecurity source audit logs are
+stored in `/data/logs/modsec_audit.json` and normalized into central events.
+A rotation policy limits each active log to 25 MiB with seven compressed copies,
+using copytruncate for uninterrupted writes. Worker failures appear in
+`/data/logs/observability-worker.log`; the worker retries export/notifications,
+with delivery cursors and alert cooldown state persisted under `/data/observability`.
+
+Run `bash tests/test-observability.sh` to exercise filtering, synthetic WAF
+normalization, alert delivery/cooldown, redaction and collector validation.
+
+### Inventory-backed alert scopes
+
+The Alerts editor uses multi-select dropdowns populated from the configured site
+inventory. Select one or more site hostnames or aliases; the route dropdown then
+shows only the NGINX locations or managed routes associated with those sites.
+A selected alias filters events by that actual requested hostname, while route
+choices remain associated with their owning site. The editor supports editing
+existing rules. No host selection means any host, and no route selection means
+any route for the selected hosts; choosing routes narrows alerts to the selected
+host-and-route combinations. For migrated NGINX sites, route definitions are
+also discovered from the saved `location` blocks, even if `.route` files have
+not been created. Paths are matched for prefix/exact patterns when the migrated
+NGINX configuration does not emit explicit route labels. Selections are validated
+against the server-side inventory on save, and older scalar host/route rules
+continue matching as before. Test via `bash tests/test-alert-selectors.sh`.
+
+### Inventory-backed log filters
+
+The **Logs** screen now uses the same multi-select host/alias and filtered route
+dropdowns as Alerts. Hostnames and aliases come from the configured site
+inventory. Route options are read from managed routes and migrated NGINX
+`location` blocks. Select multiple hostnames or aliases, then optionally
+restrict each selected host to one or more of its routes. Leaving host selection
+blank means all hosts; leaving routes blank for a selected hostname includes
+all its requests. Matching uses actual request hostnames and either NGINX route
+labels or request URI prefix/exact/regex matches for imported routes.
+
+Filters persist across submissions and are applied server-side to the Logs
+screen, CSV downloads and JSONL downloads. The search-text field starts empty
+rather than showing a literal template variable; the browser saves filter
+values and selected hosts/routes within the current tab session, while
+explicit submitted URL parameters take precedence. The backend validates
+requested host/route combinations against the current inventory. Older host/route query
+parameters still work for bookmarked URLs. Run `bash tests/test-log-selectors.sh`
+for multi-site, aliases, WAF events, status classes and tampered-filter cases.
+
+### Import native NGINX virtual hosts into managed routes
+
+LiteEdge can convert preserved NGINX virtual hosts into managed site and route
+records without dropping legacy location-level behavior. Import is an explicit,
+**offline staging operation**, never a blind startup overwrite:
+
+```bash
+python3 scripts/import-native-nginx.py --data /path/to/copied/data --dry-run
+python3 scripts/import-native-nginx.py --data /path/to/copied/data
+```
+
+The importer reads `data/migration/sites/*.conf` and already-registered
+`data/sites/*.site`, producing a `.route` for each native `location` and
+per-site templates under `data/imported/sites/`. NGINX server-level settings
+and location-specific auth, request limits, redirects, health checks, ACME
+exceptions, WebSocket headers, and certificate references remain preserved.
+Proxy target, location path/match, timeout and WAF enablement on imported proxy
+routes participate in generated NGINX configuration, and route additions or
+deletions also affect the output. Imported custom return/ACME locations appear
+in the Routes inventory and remain editable via Advanced NGINX rather than
+being incorrectly presented as reverse proxies.
+
+The runtime checks for `data/imported/sites/<hostname>/template.conf` and
+regenerates the site from managed route records, replacing the former opaque
+config-copy approach. No certificates, private keys, or API keys are checked
+into source control. The original native configuration and site state should
+be backed up and its behavior verified on isolated ports before cutover.
+
+An imported TLS certificate is retained as `mode=imported` and **is not
+silently enrolled for automatic renewal**. Configure and validate automated
+renewal separately before certificate expiration. Run
+`bash tests/test-native-nginx-migration.sh` to check importer idempotence,
+custom locations, managed proxy edits, WAF, timeouts and route creation.
+
+
+### Per-site ACME email and migrated HTTP-01 support
+
+Each site's TLS panel stores its own validated Let's Encrypt contact email in
+the persistent certificate directory and provides **Save email** independently
+of **Issue / renew**. A global ACME_EMAIL environment value is an optional
+fallback for sites without an override. ACME accounts and registration metadata
+are isolated by hostname under /data/acme/sites, allowing different accounts
+and contact addresses. Renewal reuses the saved contact for each issued site.
+
+Migrated NGINX sites originally containing unconditional HTTP redirects must
+serve /.well-known/acme-challenge/ without redirecting. For those imported
+sites, use scripts/enable-imported-acme-http01.py on a copied data directory
+before production migration. The script preserves ordinary redirect behavior,
+recognizes existing HTTP challenge routes, and is idempotent.
+
+Global NGINX migration maps are now included in every regenerated runtime
+configuration, not solely by a one-time startup patch. Remove the legacy
+one-time map injection from a migrated custom entrypoint before deploying this
+change. This prevents OWASP CRS updates from losing $allow_access and other
+custom variables.
+
+### Management regression suite and deliberate Logs loading
+
+CI runs fast backend validation and test fixtures, then builds the appliance
+and executes **the management HTTP regression suite against a disposable,
+authenticated Docker container** before publishing the image. Tests exercise
+all 35 current management POST actions (using isolated mocked backends for
+network/destructive actions), real site/route CRUD, server settings, alerts,
+collector configuration, certificate-contact validation, authentication,
+unsafe-input rejection, raw import/export method restrictions, filterable HTTP
+and WAF log events, CSV and JSONL exports. A route-contract test fails when a
+POST handler is added or removed without updating the HTTP regression matrix.
+
+Run locally with a built container image:
+
+```bash
+bash tests/test-lb-health.sh
+bash tests/test-http-api-regression.sh ghcr.io/theonemule/docker-waf:latest
+python3 tests/test-http-api-coverage.py
+node tests/test-logs-ui.js
+```
+
+The API test container has **no mount of production data**, and the fast
+non-container test suite runs before building the image. Calls that would
+contact the CA, fetch CRS updates, or reach external notification systems are
+stubbed in the HTTP *dispatcher* phase; the actual certificate/CRS/alerts
+implementations retain their separate backend tests. This is broad automated
+regression coverage, not a substitute for a dedicated end-to-end test against
+external ACME and notification providers.
+
+Opening **Logs** no longer queries event files. Choose at least one hostname,
+event type, status, method, port, timestamp or text filter and then click
+**Search logs**. An accessible loading state appears during the request, and
+results/empty states render after it completes. Blank queries, including blank
+CSV/JSONL exports, are rejected. Search state and selected hosts/routes are
+retained across filter submissions and browser Back navigation.
+
+### Redacted access logging for private MCP paths
+
+Imported or manually customized MCP routes sometimes include an opaque
+authorization value in their URL path. An opt-in NGINX access format,
+`liteedge_mcp_json`, allows those locations to record status, method, host,
+timing and upstream outcome while replacing the route label with
+`[redacted]` and the URI with `/mcp`. This is **not** automatic for every
+route: the sensitive location must explicitly use the redacted log format.
+Avoid putting private URL paths or credentials into ordinary access logs.
+See [Site routing and health operations](docs/site-routing-and-health.md#privacy-and-sensitive-mcp-routes).
+
+### Change administrator password
+
+Go to **Server Settings → Administrator password** and enter the current password, a new password, and confirmation. The authenticated password-change endpoint validates the existing SHA-512-crypt HTTP Basic Auth credential, atomically updates the persisted data-volume htpasswd file, and requires the new password for subsequent requests. Passwords are transmitted to the helper over standard input, not command-line arguments, and never logged. This change survives container rebuilds. If the current password is lost, the machine administrator must reset the authentication file from the host; no unauthenticated web reset is provided.
+
+## Offline virtual-machine installer ISO
+
+Each release now also produces **liteedge-vm-installer-VERSION-x86_64.iso** and
+its SHA-256 checksum, alongside the standalone Linux binaries and Docker image.
+GitHub Actions builds the standalone binaries **once**. The Docker and ISO
+jobs consume that same verified artifact, so their included LiteEdge version
+matches. A tagged v3 release publishes the ISO as a GitHub Release asset;
+main-branch and PR builds retain the ISO as a workflow artifact for 30 days.
+
+The bootable ISO is made with Alpine Linux 3.22's native `mkimage` tool,
+using the x86_64 virtual-machine kernel, BIOS (ISOLINUX) and UEFI (GRUB) boot loaders.
+It contains the full signed, dependency-closed Alpine APK repository needed
+for the OS installation and LiteEdge runtime, plus the compiled LiteEdge
+archive and checksum. **Building** the ISO requires internet access;
+**installing** an Alpine/LiteEdge VM from the ISO does **not**. The VM must
+have at least 2 GB RAM, a 4 GB virtual disk (8 GB recommended), a network
+adapter, and a mounted virtual CD/DVD drive. Use an ordinary virtual BIOS
+or UEFI VM. UEFI Secure Boot is **not** supported by the unsigned GRUB loader.
+
+### Installing in Proxmox, Hyper-V, VMware, VirtualBox or KVM
+
+1. Verify the ISO against its adjacent `.sha256` and mount it on the VM.
+   Boot the VM from the ISO, and log in as `root` (no password in the
+   installer live environment).
+2. Run `sh /etc/liteedge-offline/vm-iso-install.sh`. Select the target
+   **virtual disk**, explicitly confirm erasure, and complete Alpine's normal
+   prompts to set the *OS root password* and network/SSH configuration.
+   The installer configures the on-ISO APK repository and runs
+   `setup-alpine` in system-installation mode. It does **not** download
+   packages, look up GitHub releases, or need a working internet connection.
+3. Once Alpine reports disk installation complete, **eject the ISO** and
+   reboot. The included one-time OpenRC `local.d` service extracts and
+   installs LiteEdge from the offline bundle on first boot. It generates a
+   random administrator password **inside the VM**.
+4. Log into the VM console as root and inspect
+   `cat /root/liteedge-install.txt` (root-readable only) for the LiteEdge
+   credentials. Open `https://VM_IP:8443/` to administer LiteEdge. Routes
+   listen on 80/443. The state is persisted under `/var/lib/liteedge`.
+   To change the password later, use **Server Settings**.
+
+The installer preserves no baked-in user password, SSH host keys, API tokens,
+or signing private key. The live disk installer requires intentional disk
+selection and typing **ERASE**. The ISO's Alpine APK signing index is generated
+at build time, and its public signing key is embedded by the Alpine image
+builder. This is a fresh installation, not a backup/restore of the existing
+LiteEdge appliance. The first-boot service fails closed if a dependency or
+release checksum is missing or invalid; its diagnostic output is stored in
+`/root/liteedge-install.txt`.

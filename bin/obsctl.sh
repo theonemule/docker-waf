@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Structured log querying and secure observability configuration for LiteEdge.
+set -euo pipefail
+# shellcheck disable=SC1091,SC2015
+source /opt/liteedge/bin/common.sh
+umask 077
+OBS_DIR="${OBS_DIR:-$DATA_DIR/observability}"
+EVENTS_FILE="${EVENTS_FILE:-$DATA_DIR/logs/events.jsonl}"
+mkdir -p "$OBS_DIR" "$DATA_DIR/logs"
+COLLECTOR="$OBS_DIR/collector.json"
+ALERTS="$OBS_DIR/alerts.json"
+[[ -f "$ALERTS" ]] || printf '[]\n' > "$ALERTS"
+[[ -f "$COLLECTOR" ]] || printf '{}\n' > "$COLLECTOR"
+
+atomic_file() {
+  local target="$1" tmp
+  tmp="$(mktemp "$OBS_DIR/.write.XXXXXXXX")"
+  cat > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$target"
+}
+valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] && [[ "$1" != *..* ]]; }
+valid_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
+valid_email() { [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; }
+valid_https() { [[ "$1" =~ ^https://[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?%+-]*)?$ ]] && [[ "$1" != *..* ]]; }
+
+# Each JSON document is checked by jq. No shell evaluation of user-defined filters.
+query() {
+  local kind="${1:-all}" host="${2:-}" route="${3:-}" port="${4:-}" method="${5:-}" status="${6:-}" search="${7:-}" limit="${8:-100}" since="${9:-0}" scopes_json="${10:-}"
+  [[ "$kind" == all || "$kind" == http || "$kind" == waf || "$kind" == health ]] || die 'Invalid event type.'
+  if ! { [[ "$limit" =~ ^[0-9]{1,4}$ ]] && (( 10#$limit >= 1 && 10#$limit <= 1000 )); }; then die 'Limit must be 1-1000.'; fi
+  [[ "$since" =~ ^[0-9]{1,15}$ ]] || die 'Since must be a Unix timestamp.'
+  [[ -z "$status" || "$status" =~ ^[1-5][0-9]{2}$ || "$status" =~ ^[1-5]xx$ ]] || die 'Invalid status filter.'
+  [[ -z "$port" || "$port" =~ ^[0-9]{1,5}$ ]] || die 'Invalid port filter.'
+  [[ -z "$method" || "$method" =~ ^[A-Z]{1,12}$ ]] || die 'Invalid method filter.'
+  local scopes_arg=null
+  if [[ -n "$scopes_json" ]]; then
+    [[ ${#scopes_json} -le 16384 ]] || die 'Too many host/route selections.'
+    # Reject forged hostnames, aliases and routes, not just malformed JSON.
+    local catalog
+    catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+    if ! jq -en --arg raw "$scopes_json" --argjson catalog "$catalog" '
+      ($raw | fromjson?) as $scopes |
+      ($scopes | type)=="array" and ($scopes|length)<=100 and
+      all($scopes[];
+        type=="object" and ((.host // null)|type)=="string" and
+        ((.site // null)|type)=="string" and ((.routes // null)|type)=="array" and
+        (.routes|length)<=200 and all(.routes[];type=="string") and
+        (. as $s | any($catalog.hosts[]; .name==$s.host and .site==$s.site) and
+        all($s.routes[]; . as $r | any($catalog.routes[]; .site==$s.site and .route==$r))))
+    ' >/dev/null; then
+      die 'Selected hosts, aliases or routes are not valid for the configured sites.'
+    fi
+    scopes_arg="$scopes_json"
+  fi
+  [[ -z "$EVENTS_FILE" || -f "$EVENTS_FILE" ]] || return 0
+  local -a sources=()
+  local i
+  for i in 7 6 5 4 3 2 1; do
+    [[ -f "$EVENTS_FILE.$i.gz" ]] && sources+=("$EVENTS_FILE.$i.gz")
+    [[ -f "$EVENTS_FILE.$i" ]] && sources+=("$EVENTS_FILE.$i")
+  done
+  sources+=("$EVENTS_FILE")
+  { for i in "${sources[@]}"; do
+      if [[ "$i" == *.gz ]]; then gzip -cd "$i"; else cat "$i"; fi
+    done; } | jq -c --arg kind "$kind" --arg host "$host" --arg route "$route" --arg port "$port" --arg method "$method" --arg status "$status" --arg search "$search" --argjson since "$since" --argjson scopes "$scopes_arg" '
+    def route_matches($pattern):
+      . as $event |
+      ($event.route // "") == $pattern or
+      (if $pattern | startswith("prefix:") then
+         (($event.uri // "") | startswith($pattern[7:]))
+       elif $pattern | startswith("exact:") then
+         (($event.uri // "") == $pattern[6:])
+       elif $pattern | startswith("regex:") then
+         try (($event.uri // "") | test($pattern[6:])) catch false
+       else false end);
+    select(type=="object")
+    | select($kind == "all" or .type == $kind)
+    | . as $event
+    | select(if $scopes == null then
+        ($host == "" or ($event.host // "") == $host) and ($route == "" or ($event.route // "") == $route)
+      else
+        ($scopes | length)==0 or
+        any($scopes[];
+          .host == ($event.host // "") and
+          ((.routes|length)==0 or any(.routes[]; . as $route_pattern | $event | route_matches($route_pattern))))
+      end)
+    | select($port == "" or ((.port // "") | tostring) == $port or ((.listen_port // "") | tostring) == $port or ((.upstream_addr // "" | tostring | split(":") | last) == $port))
+    | select($method == "" or (.method // "") == $method)
+    | select($status == "" or (if ($status | endswith("xx")) then ((.status // 0) | tostring | startswith($status[0:1])) else ((.status // "") | tostring) == $status end))
+    | select((.epoch // 0 | tonumber) >= $since)
+    | select($search == "" or (([.host, .route, .method, .uri, .ip, .rule_id, .message, .action, .request_id] | map(. // "" | tostring) | join(" ")) | ascii_downcase | contains($search | ascii_downcase)))
+  ' | tail -n "$limit"
+}
+
+save_collector() {
+  local mode="$1" host="$2" port="$3" protocol="$4" provider="$5" url="$6" token="$7"
+  [[ "$mode" == off || "$mode" == syslog || "$mode" == https ]] || die 'Unsupported collector mode.'
+  [[ "$protocol" == udp || "$protocol" == tcp || "$protocol" == tls ]] || die 'Unsupported syslog transport.'
+  [[ "$provider" == generic || "$provider" == splunk || "$provider" == datadog || "$provider" == elastic ]] || die 'Unsupported HTTP collector.'
+  if [[ "$mode" == syslog ]]; then
+    if ! { valid_host "$host" && valid_port "$port"; }; then die 'Invalid syslog host or port.'; fi
+  fi
+  if [[ "$mode" == https ]]; then valid_https "$url" || die 'Collector must be an HTTPS URL.'; fi
+  # Keep all SMTP settings untouched when saving a log export sink. Previously
+  # omitting SMTP controls from the exporter form erased the mail configuration.
+  jq -n --argjson previous "$(cat "$COLLECTOR")" \
+    --arg mode "$mode" --arg host "$host" --arg port "$port" --arg protocol "$protocol" \
+    --arg provider "$provider" --arg url "$url" --arg token "$token" '
+    $previous + {mode:$mode,host:$host,port:($port|tonumber),protocol:$protocol,
+      provider:$provider,url:$url,
+      token:(if $token=="" then ($previous.token // "") else $token end)}' | atomic_file "$COLLECTOR"
+}
+
+save_smtp() {
+  local smtp_host="$1" smtp_port="$2" smtp_user="$3" smtp_password="$4" mail_from="$5"
+  if [[ -n "$smtp_host" ]]; then
+    if ! { valid_host "$smtp_host" && valid_port "$smtp_port"; }; then die 'Invalid SMTP host or port.'; fi
+    valid_email "$mail_from" || die 'A valid From address is required for SMTP.'
+  else
+    [[ -z "$smtp_user" && -z "$mail_from" && -z "$smtp_password" ]] || die 'SMTP host is required when specifying email settings.'
+    valid_port "$smtp_port" || die 'Invalid SMTP port.'
+  fi
+  # Retain existing password when left blank. Blank host disables and clears SMTP.
+  jq -n --argjson previous "$(cat "$COLLECTOR")" \
+    --arg smtp_host "$smtp_host" --arg smtp_port "$smtp_port" --arg smtp_user "$smtp_user" \
+    --arg smtp_password "$smtp_password" --arg mail_from "$mail_from" '
+    $previous + {smtp_host:$smtp_host,smtp_port:($smtp_port|tonumber),smtp_user:$smtp_user,
+      smtp_password:(if $smtp_host=="" then "" elif $smtp_password=="" then ($previous.smtp_password // "") else $smtp_password end),
+      mail_from:$mail_from}' | atomic_file "$COLLECTOR"
+}
+
+add_alert() {
+  local id="${1:-}" name="${2:-}" type="${3:-}" host="${4:-}" route="${5:-}" method="${6:-}" status="${7:-}" action="${8:-}" threshold="${9:-1}" window="${10:-60}" cooldown="${11:-300}" channel="${12:-webhook}" target="${13:-}" search="${14:-}" scopes_json="${15:-}"
+  [[ "$id" =~ ^[A-Za-z0-9_-]{1,48}$ && ${#name} -le 100 && -n "$name" ]] || die 'Invalid alert ID or name.'
+  [[ "$type" == all || "$type" == waf || "$type" == http || "$type" == health ]] || die 'Invalid event type.'
+  [[ "$action" == any || "$action" == blocked || "$action" == matched || "$action" == down || "$action" == up ]] || die 'Invalid WAF action.'
+  [[ "$channel" == webhook || "$channel" == email ]] || die 'Invalid alert delivery channel.'
+  if [[ "$channel" == webhook ]]; then valid_https "$target" || die 'Webhook must use HTTPS.'; else valid_email "$target" || die 'Invalid recipient.'; fi
+  if ! { [[ "$threshold" =~ ^[0-9]{1,5}$ ]] && (( 10#$threshold >= 1 && 10#$threshold <= 10000 )); }; then die 'Invalid event threshold.'; fi
+  if ! { [[ "$window" =~ ^[0-9]{1,5}$ ]] && (( 10#$window >= 10 && 10#$window <= 86400 )); }; then die 'Invalid window.'; fi
+  if ! { [[ "$cooldown" =~ ^[0-9]{1,6}$ ]] && (( 10#$cooldown >= 10 && 10#$cooldown <= 604800 )); }; then die 'Invalid cooldown.'; fi
+  [[ -z "$status" || "$status" =~ ^[1-5][0-9]{2}$ || "$status" =~ ^[1-5]xx$ ]] || die 'Invalid status.'
+  [[ -z "$method" || "$method" =~ ^[A-Z]{1,12}$ ]] || die 'Invalid method.'
+  # New rules use typed, inventory-validated per-host route scopes; old scalar
+  # host/route definitions continue to work unchanged for existing alert rules.
+  if [[ -n "$scopes_json" ]]; then
+    [[ ${#scopes_json} -le 16384 ]] || die 'Too many host/route selections.'
+    local catalog
+    catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+    if ! jq -en --argjson scopes "$scopes_json" --argjson catalog "$catalog" '
+       ($scopes | type == "array" and length <= 100 and
+         all(.[]; type == "object" and ((.host // null)|type)=="string" and
+           ((.site // null)|type)=="string" and ((.routes // null)|type)=="array" and
+           (.routes|length)<=200 and all(.routes[]; type=="string")))
+       and all($scopes[]; . as $scope |
+         any($catalog.hosts[]; .name==$scope.host and .site==$scope.site) and
+         all($scope.routes[]; . as $route |
+           any($catalog.routes[]; .site==$scope.site and .route==$route)))
+       ' >/dev/null; then
+      die 'Selected hosts, aliases, or routes are not valid for the current sites.'
+    fi
+  fi
+  jq -n --arg id "$id" --arg name "$name" --arg type "$type" --arg host "$host" --arg route "$route" --arg method "$method" --arg status "$status" --arg action "$action" --argjson threshold "$threshold" --argjson window "$window" --argjson cooldown "$cooldown" --arg channel "$channel" --arg target "$target" --arg search "$search" --arg scopes "${scopes_json:-}"     '{id:$id,name:$name,type:$type,host:(if $scopes=="" then $host else "" end),route:(if $scopes=="" then $route else "" end),
+      scopes:(if $scopes=="" then null else ($scopes|fromjson) end),
+      routes_limited:(if $scopes=="" then false else ([($scopes|fromjson)[] | .routes[]]|length)>0 end),
+      method:$method,status:$status,action:$action,threshold:$threshold,window:$window,cooldown:$cooldown,channel:$channel,target:$target,search:$search,enabled:true}' > "$OBS_DIR/.alert-new.json"
+  jq --slurpfile rule "$OBS_DIR/.alert-new.json" 'map(select(.id != $rule[0].id)) + $rule' "$ALERTS" | atomic_file "$ALERTS"
+  rm -f "$OBS_DIR/.alert-new.json"
+}
+
+case "${1:-}" in
+  query) shift; query "$@" ;;
+  collector) jq 'del(.token,.smtp_password)' "$COLLECTOR" ;;
+  collector-save) shift; save_collector "$@" ;;
+  smtp-save) shift; save_smtp "$@" ;;
+  alerts) cat "$ALERTS" ;;
+  alert-save) shift; add_alert "$@" ;;
+  alert-delete)
+    [[ "${2:-}" =~ ^[A-Za-z0-9_-]{1,48}$ ]] || die 'Invalid alert ID.'
+    jq --arg id "$2" 'map(select(.id != $id))' "$ALERTS" | atomic_file "$ALERTS" ;;
+  *) echo 'Usage: obsctl.sh query|collector|collector-save|smtp-save|alerts|alert-save|alert-delete' >&2; exit 2 ;;
+esac

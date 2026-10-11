@@ -2,6 +2,8 @@
 set -euo pipefail
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
+# shellcheck disable=SC1091
+source /opt/liteedge/bin/poolctl.sh
 
 mkdir -p "$NGINX_DIR" "$NGINX_BASELINE_DIR" "$NGINX_DIFF_DIR" "$NGINX_CONFLICT_DIR"
 stage="$(mktemp -d "$NGINX_DIR/sites.stage.XXXXXX")"
@@ -10,6 +12,21 @@ diff_stage="$(mktemp -d "$NGINX_DIR/diffs.stage.XXXXXX")"
 WAF_ROUTE_DIR="$NGINX_DIR/waf-routes"
 waf_route_stage="$(mktemp -d "$NGINX_DIR/waf-routes.stage.XXXXXX")"
 trap 'rm -rf "$stage" "$baseline_stage" "$diff_stage" "$waf_route_stage"' EXIT
+# An upstream is declared in the http context before vhost locations refer to it.
+pool_staged="$(mktemp "$NGINX_DIR/.upstreams.XXXXXXXX")"
+pool_previous="$(mktemp "$NGINX_DIR/.upstreams.previous.XXXXXXXX")"
+[[ -f "$NGINX_DIR/upstreams.conf" ]] && cp "$NGINX_DIR/upstreams.conf" "$pool_previous"
+pool_render_upstreams "$pool_staged"
+cp "$pool_staged" "$NGINX_DIR/upstreams.conf"
+cleanup() {
+  local code=$?
+  if (( code != 0 )); then
+    if [[ -s "$pool_previous" ]]; then cp "$pool_previous" "$NGINX_DIR/upstreams.conf"; else rm -f "$NGINX_DIR/upstreams.conf"; fi
+  fi
+  rm -rf "$stage" "$baseline_stage" "$diff_stage" "$waf_route_stage" "$pool_staged" "$pool_previous"
+}
+trap cleanup EXIT
+
 shopt -s nullglob
 
 HTTP_PORT="${LITEEDGE_HTTP_PORT:-80}"
@@ -128,6 +145,7 @@ emit_route_values() {
 
   id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
   printf '    %s {\n' "$location"
+  printf '        set $liteedge_route "%s";\n' "$match:$path"
 
   if [[ "$scheme" == http && "$force_https" == 1 && "$cert_exists" == 1 ]]; then
     echo "        return 301 https://\$host$HTTPS_REDIRECT_SUFFIX\$request_uri;"
@@ -146,12 +164,14 @@ emit_route_values() {
   printf '        proxy_send_timeout %ss;\n' "$timeout"
   printf '        proxy_read_timeout %ss;\n' "$timeout"
   [[ "$websocket" == 1 ]] && emit_websocket_headers
+  [[ "${POOL_COOKIE_AFFINITY:-0}" == 1 ]] && echo '        add_header Set-Cookie "liteedge_affinity=$liteedge_affinity_key; Path=/; Secure; HttpOnly; SameSite=Lax" always;'
   echo "    }"
 }
 
 emit_route() {
   local host="$1" route="$2" scheme="$3" cert_exists="$4"
   local match path target websocket timeout waf force_https waf_pl waf_plugins waf_disabled legacy_profile
+  [[ "$(route_value "$route" ACTION proxy)" == custom ]] && return 0
   match="$(route_value "$route" MATCH prefix)"
   path="$(route_value "$route" PATH /)"
   target="$(route_value "$route" TARGET "")"
@@ -168,7 +188,11 @@ emit_route() {
     waf_plugins=wordpress-rule-exclusions
   fi
 
+  target="$(pool_effective_target "$host" "$route")"
+  POOL_COOKIE_AFFINITY=0
+  [[ -n "$(kv_get "$route" BACKENDS)" && "$(kv_get "$route" LB_MODE)" == cookie ]] && POOL_COOKIE_AFFINITY=1
   emit_route_values "$host" "$match" "$path" "$target" "$websocket" "$timeout" "$waf" "$force_https" "$waf_pl" "$waf_plugins" "$waf_disabled" "$scheme" "$cert_exists"
+  POOL_COOKIE_AFFINITY=0
 }
 
 has_root_route() {
@@ -311,6 +335,22 @@ CONF
     fi
   } > "$generated"
 
+  # Imported sites use native server directives plus managed route records.
+  # The preserved template is authoritative, not a second opaque conf overlay.
+  if [[ -s "$DATA_DIR/imported/sites/$slug/template.conf" ]]; then
+    /opt/liteedge/bin/render-imported.sh "$host" "$generated"
+  fi
+
+  # Disabled sites retain their configuration and certificates. NGINX responds
+  # 503 for both HTTP and HTTPS until the site is enabled again.
+  if [[ "$(kv_get "$file" ENABLED)" == 0 ]]; then
+    # Exact, prefix, and regex locations must also return 503.
+    awk '/^[[:space:]]*server_name[[:space:]]/ {print; print "    return 503;"; next}
+         /^[[:space:]]*location[[:space:]].*\{[[:space:]]*$/ {print; print "        return 503;"; next}
+         {print}' "$generated" > "$generated.disabled"
+    mv "$generated.disabled" "$generated"
+  fi
+
   record_generated_diff "$host" "$generated"
   merge_manual_delta "$host" "$generated" "$out"
 done
@@ -331,6 +371,7 @@ if [[ "${SKIP_NGINX_TEST:-0}" != 1 ]] && ! "$NGINX_BIN" -t -c "$NGINX_CONF"; the
   rm -rf "$NGINX_SITE_DIR" "$WAF_ROUTE_DIR"
   [[ -d "$backup" ]] && mv "$backup" "$NGINX_SITE_DIR"
   [[ -d "$waf_backup" ]] && mv "$waf_backup" "$WAF_ROUTE_DIR"
+  if [[ -s "$pool_previous" ]]; then cp "$pool_previous" "$NGINX_DIR/upstreams.conf"; else rm -f "$NGINX_DIR/upstreams.conf"; fi
   echo "Generated NGINX configuration failed validation; previous configuration restored." >&2
   exit 1
 fi

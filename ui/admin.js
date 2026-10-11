@@ -1,3 +1,102 @@
+// Each route manages a single ordered set of backend URLs. The first stored
+// endpoint maps to TARGET and the remainder to BACKENDS for API compatibility;
+// there is no distinguished primary endpoint in the route editor.
+(() => {
+  const maxBackends = 16;
+  const findRows = (pool) => Array.from(pool.querySelectorAll("[data-backend-row]"));
+  const showPoolError = (pool, message) => {
+    const error = pool.querySelector("[data-backend-error]");
+    if (!error) return;
+    error.textContent = message;
+    error.hidden = !message;
+  };
+  const refreshPool = (pool) => {
+    const rows = findRows(pool);
+    rows.forEach((row, index) => {
+      const label = row.querySelector("[data-backend-label]");
+      const input = row.querySelector("[data-backend-url]");
+      if (label) label.textContent = "Backend " + (index + 1);
+      if (input) input.setAttribute("aria-label", "Backend " + (index + 1) + " URL");
+    });
+    const add = pool.querySelector("[data-backend-add]");
+    if (add) add.disabled = rows.length >= maxBackends;
+  };
+  const serializePool = (pool, validate = false) => {
+    const urls = findRows(pool).map((row) => (row.querySelector("[data-backend-url]")?.value || "").trim());
+    if (validate && (urls.length === 0 || urls.some((url) => !url))) {
+      showPoolError(pool, "Add at least one backend and enter a URL in every row.");
+      return false;
+    }
+    if (urls.length > maxBackends) {
+      showPoolError(pool, "A backend pool supports at most 16 endpoints.");
+      return false;
+    }
+    pool.querySelector('input[name="target"]').value = urls[0] || "";
+    pool.querySelector('input[name="backends"]').value = urls.slice(1).join(",");
+    showPoolError(pool, "");
+    return true;
+  };
+  const makeRow = () => {
+    const row = document.createElement("div");
+    row.className = "d-flex flex-wrap align-items-center gap-2 mb-2";
+    row.setAttribute("data-backend-row", "");
+    const label = document.createElement("span");
+    label.className = "small text-secondary";
+    label.setAttribute("data-backend-label", "");
+    const input = document.createElement("input");
+    input.type = "url";
+    input.required = true;
+    input.className = "form-control font-monospace flex-grow-1";
+    input.style.cssText = "min-width:220px;width:auto";
+    input.placeholder = "http://app:8080";
+    input.setAttribute("data-backend-url", "");
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "btn btn-sm btn-outline-danger";
+    remove.textContent = "Remove";
+    remove.setAttribute("data-backend-remove", "");
+    row.append(label, input, remove);
+    return row;
+  };
+  document.addEventListener("click", (event) => {
+    const add = event.target.closest("[data-backend-add]");
+    if (add) {
+      const pool = add.closest("[data-backend-pool]");
+      if (!pool) return;
+      if (findRows(pool).length >= maxBackends) return;
+      const row = makeRow();
+      pool.querySelector("[data-backend-list]").appendChild(row);
+      refreshPool(pool);
+      serializePool(pool);
+      row.querySelector("[data-backend-url]").focus();
+      return;
+    }
+    const remove = event.target.closest("[data-backend-remove]");
+    if (remove) {
+      const pool = remove.closest("[data-backend-pool]");
+      if (!pool) return;
+      remove.closest("[data-backend-row]")?.remove();
+      refreshPool(pool);
+      serializePool(pool);
+    }
+  });
+  document.addEventListener("input", (event) => {
+    const pool = event.target.closest("[data-backend-pool]");
+    if (pool && event.target.matches("[data-backend-url]")) serializePool(pool);
+  });
+  // Capture precedes the AJAX action handler, which snapshots new FormData().
+  // Prevent an invalid empty pool from posting any route changes.
+  document.addEventListener("submit", (event) => {
+    const form = event.target.closest("form");
+    if (!form) return;
+    const pool = form.querySelector("[data-backend-pool]");
+    if (pool && !serializePool(pool, true)) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
+  }, true);
+})();
+
 (() => {
   function showStatus(form, message, isError) {
     let status = form.querySelector(".upload-status");
@@ -77,8 +176,10 @@
     try {
       const data = new FormData(form);
       if (submitter && submitter.name) data.set(submitter.name, submitter.value);
-      const method = (form.method || "POST").toUpperCase();
-      const action = new URL(form.getAttribute("action") || location.href, location.href);
+      // Honor per-button formaction/formmethod (e.g., Save email versus Issue).
+      const method = (submitter?.getAttribute?.("formmethod") || form.method || "POST").toUpperCase();
+      const destination = submitter?.getAttribute?.("formaction") || form.getAttribute("action") || location.href;
+      const action = new URL(destination, location.href);
       const request = { method, credentials: "same-origin", headers: { "Accept": "text/html" } };
       if (method === "GET") {
         for (const [key, value] of data) action.searchParams.append(key, value);
@@ -168,6 +269,9 @@
       const params = new URLSearchParams();
       const certBox = siteForm.querySelector('input[name="certificates"]');
       params.set("certificates", certBox && certBox.checked ? "1" : "0");
+      // Site imports must identify the expected site, not auto-detect an all-sites bundle.
+      if (siteForm.dataset.scope) params.set("scope", siteForm.dataset.scope);
+      if (siteForm.dataset.host) params.set("host", siteForm.dataset.host);
       await uploadRaw(siteForm, "/admin/import?" + params.toString());
       return;
     }
@@ -176,6 +280,7 @@
     if (wafForm) {
       event.preventDefault();
       await uploadRaw(wafForm, "/admin/owasp/import");
+      return;
     }
 
     const crsForm = event.target.closest(".crs-import-form");
@@ -191,4 +296,266 @@
       await submitAction(form, event);
     }
   });
+})();
+// Preserve filter and collector selections across full-page form submissions.
+(() => {
+  if (typeof location === "undefined" || typeof URLSearchParams === "undefined" ||
+      typeof document === "undefined" || typeof document.querySelectorAll !== "function") return;
+  const params = new URLSearchParams(location.search);
+  document.querySelectorAll('form[action="/admin/logs"] select[name]').forEach((select) => {
+    const value = params.get(select.name);
+    if (value !== null && Array.from(select.options).some((option) => option.value === value)) select.value = value;
+  });
+  document.querySelectorAll('select[data-selected]').forEach((select) => {
+    const value = select.getAttribute('data-selected');
+    if (Array.from(select.options).some((option) => option.value === value)) select.value = value;
+  });
+})();
+
+// Alerts: searchable inventory-backed host/alias + route selectors. No inline JS.
+(() => {
+  if (typeof document === "undefined" || typeof document.getElementById !== "function") return;
+  const form = document.getElementById("alertRuleForm");
+  if (!form) return;
+  const hostChecks = Array.from(form.querySelectorAll("[data-alert-host]"));
+  const routeChecks = Array.from(form.querySelectorAll("[data-alert-route]"));
+  const hostButton = document.getElementById("alertHostButton");
+  const routeButton = document.getElementById("alertRouteButton");
+  const hostOptions = document.getElementById("alertHostOptions");
+  const routeOptions = document.getElementById("alertRouteOptions");
+  const scopesField = form.querySelector('input[name="scopes_json"]');
+  const checked = (items) => items.filter((item) => item.checked);
+  const shorten = (values, fallback) => {
+    if (!values.length) return fallback;
+    return values.length <= 2 ? values.join(", ") : `${values.length} selected`;
+  };
+  const hideMenu = (button, menu) => {
+    menu.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  function updatePickers() {
+    const selectedHosts = checked(hostChecks);
+    const selectedSites = new Set(selectedHosts.map((item) => item.dataset.site));
+    routeChecks.forEach((item) => {
+      const available = selectedSites.has(item.dataset.site);
+      item.closest("[data-alert-route-item]").hidden = !available;
+      if (!available) item.checked = false;
+    });
+    hostButton.textContent = shorten(selectedHosts.map((item) => item.value), "All hosts (select to restrict)");
+    routeButton.disabled = selectedHosts.length === 0 || !routeChecks.some((item) => !item.closest("[data-alert-route-item]").hidden);
+    const selectedRoutes = checked(routeChecks);
+    routeButton.textContent = routeButton.disabled ?
+      (selectedHosts.length ? "No routes configured for these hosts" : "Select hosts first") :
+      shorten(selectedRoutes.map((item) => `${item.dataset.site} · ${item.value}`), "All routes (select to restrict)");
+    if (routeButton.disabled) hideMenu(routeButton, routeOptions);
+    const scopes = selectedHosts.map((item) => ({
+      host: item.value,
+      site: item.dataset.site,
+      routes: selectedRoutes.filter((route) => route.dataset.site === item.dataset.site).map((route) => route.value)
+    }));
+    scopesField.value = JSON.stringify(scopes);
+  }
+  hostChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  routeChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  document.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-alert-toggle]");
+    if (toggle && !toggle.disabled) {
+      const menu = toggle.dataset.alertToggle === "hosts" ? hostOptions : routeOptions;
+      const otherButton = toggle.dataset.alertToggle === "hosts" ? routeButton : hostButton;
+      const otherMenu = toggle.dataset.alertToggle === "hosts" ? routeOptions : hostOptions;
+      hideMenu(otherButton, otherMenu);
+      menu.hidden = !menu.hidden;
+      toggle.setAttribute("aria-expanded", String(!menu.hidden));
+      return;
+    }
+    if (!event.target.closest("[data-alert-picker]")) {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+    const edit = event.target.closest("[data-alert-edit]");
+    if (!edit) return;
+    let rule;
+    try { rule = JSON.parse(edit.dataset.alertEdit); } catch (_) { return; }
+    form.reset();
+    for (const key of ["id", "name", "type", "action", "method", "status", "search", "threshold", "window", "cooldown", "channel", "target"]) {
+      const input = form.elements.namedItem(key);
+      if (input && rule[key] !== undefined && rule[key] !== null) input.value = String(rule[key]);
+    }
+    const scopes = Array.isArray(rule.scopes) ? rule.scopes :
+      (rule.host ? [{host: rule.host, routes: rule.route ? [rule.route] : []}] : []);
+    hostChecks.forEach((item) => { item.checked = scopes.some((scope) => scope.host === item.value); });
+    updatePickers();
+    routeChecks.forEach((item) => {
+      item.checked = !item.closest("[data-alert-route-item]").hidden &&
+        scopes.some((scope) => (scope.site || hostChecks.find((host) => host.value === scope.host)?.dataset.site) === item.dataset.site &&
+          Array.isArray(scope.routes) && scope.routes.includes(item.value));
+    });
+    updatePickers();
+    form.scrollIntoView({behavior:"smooth",block:"center"});
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+  });
+  form.addEventListener("submit", updatePickers);
+  updatePickers();
+})();
+
+// Logs use the same inventory-backed, multi-host/route selectors as Alerts.
+(() => {
+  if (typeof document === "undefined" || typeof document.getElementById !== "function") return;
+  const form = document.getElementById("logFilterForm");
+  if (!form) return;
+  const hostChecks = Array.from(form.querySelectorAll("[data-log-host]"));
+  const routeChecks = Array.from(form.querySelectorAll("[data-log-route]"));
+  const hostButton = document.getElementById("logHostButton");
+  const routeButton = document.getElementById("logRouteButton");
+  const hostOptions = document.getElementById("logHostOptions");
+  const routeOptions = document.getElementById("logRouteOptions");
+  const scopesField = form.querySelector('input[name="scopes_json"]');
+  if (!hostButton || !routeButton || !hostOptions || !routeOptions || !scopesField) return;
+  // The submitted URL is authoritative after a search. In between searches,
+  // keep the filter selections for this browser tab without querying logs.
+  const storageKey = "liteedge:log-search-filters:v1";
+  const submittedSearch = typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("apply") === "1";
+  let storedFilters = null;
+  try { storedFilters = JSON.parse(sessionStorage.getItem(storageKey) || "null"); } catch (_) {}
+  const namedControls = Array.from(form.querySelectorAll('input[name]:not([type="hidden"]), select[name]'));
+  if (!submittedSearch && storedFilters && storedFilters.values && typeof storedFilters.values === "object") {
+    namedControls.forEach((control) => {
+      const value = storedFilters.values[control.name];
+      if (typeof value !== "string") return;
+      if (control.tagName === "SELECT" && !Array.from(control.options).some((option) => option.value === value)) return;
+      control.value = value;
+    });
+  }
+  const saveFilters = () => {
+    const values = {};
+    namedControls.forEach((control) => { values[control.name] = control.value; });
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify({ values, scopes: JSON.parse(scopesField.value || "[]") }));
+    } catch (_) { /* Filter retention is optional when browser storage is disabled. */ }
+  };
+  const checked = (items) => items.filter((item) => item.checked);
+  const shorten = (values, fallback) => values.length === 0 ? fallback :
+    (values.length <= 2 ? values.join(", ") : `${values.length} selected`);
+  const hideMenu = (button, menu) => {
+    menu.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+  };
+  function updatePickers() {
+    const selectedHosts = checked(hostChecks);
+    const selectedSites = new Set(selectedHosts.map((item) => item.dataset.site));
+    routeChecks.forEach((item) => {
+      const available = selectedSites.has(item.dataset.site);
+      item.closest("[data-log-route-item]").hidden = !available;
+      if (!available) item.checked = false;
+    });
+    hostButton.textContent = shorten(selectedHosts.map((item) => item.value), "All hosts (select to filter)");
+    routeButton.disabled = selectedHosts.length === 0 || !routeChecks.some((item) => !item.closest("[data-log-route-item]").hidden);
+    const selectedRoutes = checked(routeChecks);
+    routeButton.textContent = routeButton.disabled ?
+      (selectedHosts.length ? "No routes configured for these hosts" : "Select hosts first") :
+      shorten(selectedRoutes.map((item) => `${item.dataset.site} · ${item.value}`), "All routes (select to filter)");
+    if (routeButton.disabled) hideMenu(routeButton, routeOptions);
+    scopesField.value = JSON.stringify(selectedHosts.map((item) => ({
+      host: item.value,
+      site: item.dataset.site,
+      routes: selectedRoutes.filter((route) => route.dataset.site === item.dataset.site).map((route) => route.value)
+    })));
+  }
+  hostChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  routeChecks.forEach((item) => item.addEventListener("change", updatePickers));
+  document.addEventListener("click", (event) => {
+    const toggle = event.target.closest("[data-log-toggle]");
+    if (toggle && !toggle.disabled) {
+      const menu = toggle.dataset.logToggle === "hosts" ? hostOptions : routeOptions;
+      const otherButton = toggle.dataset.logToggle === "hosts" ? routeButton : hostButton;
+      const otherMenu = toggle.dataset.logToggle === "hosts" ? routeOptions : hostOptions;
+      hideMenu(otherButton, otherMenu);
+      menu.hidden = !menu.hidden;
+      toggle.setAttribute("aria-expanded", String(!menu.hidden));
+      return;
+    }
+    if (!event.target.closest("[data-log-picker]")) {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      hideMenu(hostButton, hostOptions);
+      hideMenu(routeButton, routeOptions);
+    }
+  });
+  // Preserve both host and route selections on navigation/reload/export.
+  let savedScopes = [];
+  try {
+    const parsed = !submittedSearch && storedFilters && Array.isArray(storedFilters.scopes) ?
+      storedFilters.scopes : JSON.parse(form.dataset.logInitialScopes || scopesField.value || "[]");
+    if (Array.isArray(parsed)) savedScopes = parsed;
+  } catch (_) { savedScopes = []; }
+  hostChecks.forEach((item) => {
+    item.checked = savedScopes.some((scope) => scope.host === item.value && scope.site === item.dataset.site);
+  });
+  updatePickers();
+  routeChecks.forEach((item) => {
+    item.checked = !item.closest("[data-log-route-item]").hidden && savedScopes.some((scope) =>
+      scope.site === item.dataset.site && Array.isArray(scope.routes) && scope.routes.includes(item.value));
+  });
+  updatePickers();
+  // Changes to host/route checkboxes bubble after updatePickers has refreshed scopes_json.
+  form.addEventListener("input", saveFilters);
+  form.addEventListener("change", saveFilters);
+  form.addEventListener("submit", saveFilters);
+  saveFilters();
+  const submitButton = document.getElementById("logSearchButton");
+  const spinner = document.getElementById("logSearchSpinner");
+  const buttonLabel = document.getElementById("logSearchButtonLabel");
+  const feedback = document.getElementById("logSearchFeedback");
+  function hasSearchFilter() {
+    return checked(hostChecks).length > 0 ||
+      Array.from(form.querySelectorAll('input[name], select[name]')).some((control) => {
+        const value = String(control.value || "").trim();
+        if (["apply", "scopes_json", "limit"].includes(control.name)) return false;
+        if (control.name === "type") return value !== "" && value !== "all";
+        if (control.name === "since") return Number(value) > 0;
+        return value !== "";
+      });
+  }
+  form.addEventListener("submit", (event) => {
+    updatePickers();
+    if (!hasSearchFilter()) {
+      event.preventDefault();
+      if (feedback) {
+        feedback.hidden = false;
+        feedback.className = "small mt-3 text-danger";
+        feedback.textContent = "Choose at least one filter before searching.";
+      }
+      return;
+    }
+    form.setAttribute("aria-busy", "true");
+    if (submitButton) submitButton.disabled = true;
+    if (spinner) { spinner.hidden = false; spinner.classList.remove("d-none"); }
+    if (buttonLabel) buttonLabel.textContent = "Searching…";
+    if (feedback) {
+      feedback.hidden = false;
+      feedback.className = "small mt-3 text-primary";
+      feedback.textContent = "Searching logs. Please wait…";
+    }
+  });
+  // Browsers can restore a previous page from BFCache; never leave the button
+  // in an in-progress state after navigating back to the filter form.
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("pageshow", () => {
+      form.removeAttribute("aria-busy");
+      if (submitButton) submitButton.disabled = false;
+      if (spinner) { spinner.hidden = true; spinner.classList.add("d-none"); }
+      if (buttonLabel) buttonLabel.textContent = "Search logs";
+      if (feedback && !feedback.classList.contains("text-danger")) feedback.hidden = true;
+    });
+  }
 })();

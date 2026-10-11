@@ -69,12 +69,14 @@ response_headers() {
 }
 
 page_head() {
-  local title path sites_active="" owasp_active="" server_active=""
+  local title path sites_active="" owasp_active="" server_active="" logs_active="" alerts_active=""
   title="$(html_escape "${1:-LiteEdge}")"
   path="${PATH_INFO:-/}"
   case "$path" in
     /admin/owasp*) owasp_active=active ;;
     /admin/server*) server_active=active ;;
+    /admin/logs*) logs_active=active ;;
+    /admin/alerts*) alerts_active=active ;;
     *) sites_active=active ;;
   esac
   response_headers
@@ -87,14 +89,7 @@ page_head() {
   <title>$title - LiteEdge</title>
   <link href="/assets/bootstrap.min.css" rel="stylesheet">
   <script src="/assets/admin.js" defer></script>
-  <style>
-    dialog.liteedge-dialog { width:min(760px,calc(100vw - 2rem)); border:0; border-radius:.75rem; padding:0; box-shadow:0 1rem 3rem rgba(0,0,0,.25); }
-    dialog.liteedge-dialog.liteedge-dialog-lg { width:min(1400px,calc(100vw - 2rem)); }
-    dialog.liteedge-dialog::backdrop { background:rgba(0,0,0,.45); }
-    .sidebar-nav { min-height:calc(100vh - 56px); }
-    .sidebar-nav .nav-link { color:var(--bs-body-color); border-radius:.375rem; }
-    .sidebar-nav .nav-link.active { background:var(--bs-primary); color:#fff; }
-  </style>
+  <link href="/assets/admin.css" rel="stylesheet">
 </head>
 <body class="bg-body-tertiary">
 <nav class="navbar bg-dark navbar-dark">
@@ -108,6 +103,8 @@ page_head() {
   <nav class="nav nav-pills flex-column gap-1">
     <a class="nav-link $sites_active" href="/">Sites</a>
     <a class="nav-link $owasp_active" href="/admin/owasp">OWASP</a>
+    <a class="nav-link $logs_active" href="/admin/logs">Logs</a>
+    <a class="nav-link $alerts_active" href="/admin/alerts">Alerts</a>
     <a class="nav-link $server_active" href="/admin/server">Server Settings</a>
   </nav>
 </aside>
@@ -213,18 +210,23 @@ HTML
   </div></div>
 </dialog>
 <div class="card shadow-sm"><div class="table-responsive"><table class="table table-hover align-middle mb-0">
-<thead><tr><th>Host</th><th>Aliases</th><th>Routes</th><th>TLS</th><th class="text-end">Actions</th></tr></thead><tbody>
+<thead><tr><th>Host</th><th>Aliases</th><th>Routes</th><th>TLS</th><th>Status</th><th class="text-end">Actions</th></tr></thead><tbody>
 HTML
   if [[ ${#files[@]} -eq 0 ]]; then
-    echo '<tr><td colspan="5" class="text-center text-secondary py-5">No sites configured yet.</td></tr>'
+    echo '<tr><td colspan="6" class="text-center text-secondary py-5">No sites configured yet.</td></tr>'
   else
     for file in "${files[@]}"; do
       host="$(kv_get "$file" HOST)"; aliases="$(kv_get "$file" ALIASES)"
-      route_count="$(find "$(route_dir "$host")" -maxdepth 1 -type f -name '*.route' 2>/dev/null | wc -l | tr -d ' ')"
+      if [[ -d "$(route_dir "$host")" ]]; then
+        route_count="$(find "$(route_dir "$host")" -maxdepth 1 -type f -name '*.route' 2>/dev/null | wc -l | tr -d ' ')"
+      else
+        route_count=0
+      fi
       if [[ "$route_count" == 0 && -n "$(kv_get "$file" UPSTREAM)" ]]; then route_count=1; fi
       tls="$(cert_mode "$host")"
+      enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
       cat <<HTML
-<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
+<tr><td><a class="fw-semibold text-decoration-none" href="/admin/site?host=$(html_escape "$host")">$(html_escape "$host")</a></td><td>$(html_escape "${aliases:--}")</td><td><span class="badge text-bg-light border">$route_count</span></td><td><span class="badge text-bg-light border">$(html_escape "$tls")</span></td><td><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span></td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="/admin/site?host=$(html_escape "$host")">Manage</a> <form class="d-inline" method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="return_to" value="overview"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)" type="submit">$([[ "$enabled" == 1 ]] && echo Disable || echo Enable)</button></form> <form class="d-inline" method="post" action="/admin/site/delete"><input type="hidden" name="host" value="$(html_escape "$host")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete</button></form></td></tr>
 HTML
     done
   fi
@@ -251,6 +253,11 @@ site_editor() {
 </div></div><div class="card-footer text-end"><button class="btn btn-primary" type="submit">Save site</button></div></form>
 HTML
   if [[ "$exists" == 1 ]]; then
+    file="$(site_file "$host")"
+    enabled="$(kv_get "$file" ENABLED)"; [[ "$enabled" == 0 ]] || enabled=1
+    cat <<HTML
+<div class="d-flex align-items-center gap-3 mb-3"><span class="badge $([[ "$enabled" == 1 ]] && echo text-bg-success || echo text-bg-secondary)">$([[ "$enabled" == 1 ]] && echo Enabled || echo Disabled)</span><form method="post" action="/admin/site/$([[ "$enabled" == 1 ]] && echo disable || echo enable)"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="return_to" value="site"><button class="btn btn-sm $([[ "$enabled" == 1 ]] && echo btn-outline-secondary || echo btn-outline-success)">$([[ "$enabled" == 1 ]] && echo 'Disable site' || echo 'Enable site')</button></form><span class="text-secondary small">Disabling returns HTTP 503 without deleting routes or certificates.</span></div>
+HTML
     routes_panel "$host"
     certificate_panel "$host"
     advanced_nginx_panel "$host"
@@ -288,6 +295,39 @@ HTML
   fi
 }
 
+backend_pool_fields() {
+  local primary="$1" extra="$2" url index=0
+  local -a urls=("$primary") extras=()
+  if [[ -n "$extra" ]]; then
+    IFS=',' read -r -a extras <<< "$extra"
+    urls+=("${extras[@]}")
+  fi
+  cat <<HTML
+<div data-backend-pool data-max-backends="16">
+  <input type="hidden" name="target" value="$(html_escape "$primary")">
+  <input type="hidden" name="backends" value="$(html_escape "$extra")">
+  <div class="mb-2 fw-semibold">Backend pool</div>
+  <div data-backend-list>
+HTML
+  for url in "${urls[@]}"; do
+    index=$((index+1))
+    cat <<HTML
+    <div class="d-flex flex-wrap align-items-center gap-2 mb-2" data-backend-row>
+      <span class="small text-secondary" data-backend-label>Backend $index</span>
+      <input class="form-control font-monospace flex-grow-1" style="min-width:220px;width:auto" type="url" data-backend-url value="$(html_escape "$url")" aria-label="Backend $index URL" placeholder="http://app:8080" required>
+      <button class="btn btn-sm btn-outline-danger" type="button" data-backend-remove>Remove</button>
+    </div>
+HTML
+  done
+  cat <<HTML
+  </div>
+  <button class="btn btn-sm btn-outline-primary" type="button" data-backend-add>Add backend</button>
+  <div class="small text-danger mt-2" role="alert" data-backend-error hidden></div>
+  <div class="form-text">Add or remove endpoints individually. A route needs at least one backend (up to 16). Multiple endpoints must use HTTP URLs with matching base paths.</div>
+</div>
+HTML
+}
+
 routes_panel() {
   local host="$1" dir route id match path target websocket timeout waf force_https default_timeout
   local waf_pl waf_plugins waf_disabled legacy_profile plugin_count default_pl
@@ -309,6 +349,8 @@ HTML
       match="$(kv_get "$route" MATCH)"
       path="$(kv_get "$route" PATH)"
       target="$(kv_get "$route" TARGET)"
+      action="$(kv_get "$route" ACTION)"
+      [[ -n "$action" ]] || action=proxy
       websocket="$(kv_get "$route" WEBSOCKET)"; [[ "$websocket" =~ ^[01]$ ]] || websocket=1
       timeout="$(kv_get "$route" TIMEOUT)"; [[ -n "$timeout" ]] || timeout="$default_timeout"
       waf="$(kv_get "$route" WAF)"; [[ "$waf" =~ ^[01]$ ]] || waf=1
@@ -320,19 +362,45 @@ HTML
       if [[ -z "$waf_plugins" && "$legacy_profile" == wordpress && -d "$WAF_PLUGIN_DIR/wordpress-rule-exclusions" ]]; then
         waf_plugins=wordpress-rule-exclusions
       fi
+      backends="$(kv_get "$route" BACKENDS)"
+      lb_mode="$(kv_get "$route" LB_MODE)"; lb_mode="${lb_mode:-round_robin}"
+      max_fails="$(kv_get "$route" MAX_FAILS)"; max_fails="${max_fails:-3}"
+      fail_timeout="$(kv_get "$route" FAIL_TIMEOUT)"; fail_timeout="${fail_timeout:-30}"
+      health_enabled="$(kv_get "$route" HEALTH_ENABLED)"
+      health_path="$(kv_get "$route" HEALTH_PATH)"; health_path="${health_path:-/health}"
+      health_expect="$(kv_get "$route" HEALTH_EXPECT)"; health_expect="${health_expect:-200}"
+      health_interval="$(kv_get "$route" HEALTH_INTERVAL)"; health_interval="${health_interval:-30}"
+      health_timeout="$(kv_get "$route" HEALTH_TIMEOUT)"; health_timeout="${health_timeout:-5}"
+      health_fall="$(kv_get "$route" HEALTH_FALL)"; health_fall="${health_fall:-3}"
+      health_rise="$(kv_get "$route" HEALTH_RISE)"; health_rise="${health_rise:-2}"
+      health_cooldown="$(kv_get "$route" HEALTH_COOLDOWN)"; health_cooldown="${health_cooldown:-300}"
       plugin_count=0
       [[ -n "$waf_plugins" ]] && plugin_count="$(awk -F, '{print NF}' <<< "$waf_plugins")"
 
       cat <<HTML
-<details class="border rounded p-3 mb-3">
-<summary class="d-flex flex-wrap gap-2 align-items-center"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "$target")</code><span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</summary>
+<div class="border rounded p-3 mb-3 d-flex flex-wrap gap-2 align-items-center"><div class="d-flex flex-wrap gap-2 align-items-center flex-grow-1"><code>$(html_escape "$path")</code><span class="text-secondary">→</span><code>$(html_escape "${target:-(native Nginx action)}")</code>$([[ "$action" == custom ]] && echo '<span class="badge text-bg-secondary">Imported custom</span>')<span class="badge text-bg-light border">$(html_escape "$match")</span>$([[ "$waf" == 1 ]] && echo "<span class=\"badge text-bg-success\">OWASP PL$(html_escape "$waf_pl")</span>")$([[ "$plugin_count" -gt 0 ]] && echo "<span class=\"badge text-bg-primary\">$(html_escape "$plugin_count") plugin(s)</span>")$([[ "$websocket" == 1 ]] && echo '<span class="badge text-bg-info">WebSocket</span>')$([[ "$force_https" == 1 ]] && echo '<span class="badge text-bg-secondary">HTTPS redirect</span>')</div><button class="btn btn-sm btn-outline-primary" type="button" data-dialog-open="routeDialog_$id" $([[ "$action" == custom ]] && echo disabled)>Configure</button></div>
+<dialog class="liteedge-dialog liteedge-dialog-lg" id="routeDialog_$id"><div class="card border-0"><div class="card-header d-flex justify-content-between align-items-center"><strong>Edit route $(html_escape "$path")</strong><button class="btn-close" type="button" data-dialog-close aria-label="Close"></button></div><div class="card-body">
+HTML
+      if [[ "$action" == custom ]]; then
+        echo '<p class="small text-secondary mt-3">This imported route has custom Nginx behavior (redirect, health check, or ACME). Its original directives are preserved in the site Advanced NGINX configuration. Proxy targets are editable directly on proxy routes.</p>'
+      else
+        cat <<HTML
 <form method="post" action="/admin/route/save" class="mt-3"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix" $(selected "$match" prefix)>Prefix</option><option value="exact" $(selected "$match" exact)>Exact</option><option value="regex" $(selected "$match" regex)>Regex</option></select></div>
-<div class="col-md-3"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="$(html_escape "$path")" required></div>
-<div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" value="$(html_escape "$target")" required></div>
-<div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$timeout")" required></div>
+<div class="col-md-6"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="$(html_escape "$path")" required></div>
+<div class="col-md-4"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$timeout")" required></div>
 </div>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
+$(backend_pool_fields "$target" "$backends")
+<div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin" $(selected "$lb_mode" round_robin)>Round robin</option><option value="least_conn" $(selected "$lb_mode" least_conn)>Least connections</option><option value="ip_hash" $(selected "$lb_mode" ip_hash)>Client IP hash</option><option value="cookie" $(selected "$lb_mode" cookie)>Affinity cookie (HTTPS)</option></select></div>
+<div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="$(html_escape "$max_fails")"></div>
+<div class="col-md-4"><label class="form-label">Fail timeout (seconds)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="$(html_escape "$fail_timeout")"></div></div>
+</fieldset>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Active health probe</legend>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" name="health_enabled" value="1" id="health_$id" $(checkbox "$health_enabled")><label class="form-check-label" for="health_$id">Enable HTTP checks and health events</label></div>
+<div class="row g-3"><div class="col-md-5"><label class="form-label">Probe path</label><input class="form-control" name="health_path" value="$(html_escape "$health_path")"></div><div class="col-md-3"><label class="form-label">Expected status</label><input class="form-control" name="health_expect" value="$(html_escape "$health_expect")"></div><div class="col-md-2"><label class="form-label">Interval (sec)</label><input class="form-control" type="number" name="health_interval" min="10" max="3600" value="$(html_escape "$health_interval")"></div><div class="col-md-2"><label class="form-label">Timeout (sec)</label><input class="form-control" type="number" name="health_timeout" min="1" max="3600" value="$(html_escape "$health_timeout")"></div><div class="col-md-4"><label class="form-label">Failures before down</label><input class="form-control" type="number" name="health_fall" min="1" max="100" value="$(html_escape "$health_fall")"></div><div class="col-md-4"><label class="form-label">Successes before recovery</label><input class="form-control" type="number" name="health_rise" min="1" max="100" value="$(html_escape "$health_rise")"></div><div class="col-md-4"><label class="form-label">Notification cooldown (sec)</label><input class="form-control" type="number" name="health_cooldown" min="10" max="3600" value="$(html_escape "$health_cooldown")"></div></div>
+<div class="form-text">Checks produce down/recovery events for alerts. Traffic exclusion is handled by NGINX passive max_fails/fail_timeout, not active probe state.</div></fieldset>
 <div class="border rounded p-3 mt-3">
 <div class="d-flex flex-wrap gap-4 align-items-center mb-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="waf" value="1" id="waf_$id" $(checkbox "$waf")><label class="form-check-label fw-semibold" for="waf_$id">OWASP CRS</label></div>
@@ -355,21 +423,30 @@ HTML
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="https_$id" $(checkbox "$force_https")><label class="form-check-label" for="https_$id">HTTP → HTTPS</label></div>
 </div>
 <button class="btn btn-sm btn-primary mt-3" type="submit">Save route</button></form>
+HTML
+      fi
+      cat <<HTML
 <form method="post" action="/admin/route/delete" class="mt-2"><input type="hidden" name="host" value="$(html_escape "$host")"><input type="hidden" name="id" value="$(html_escape "$id")"><button class="btn btn-sm btn-outline-danger" type="submit">Delete route</button></form>
-</details>
+</div></div></dialog>
 HTML
     done
   fi
 
   cat <<HTML
-<hr class="my-4"><h2 class="h6">Add route</h2>
+<button class="btn btn-outline-primary" type="button" data-dialog-open="addRouteDialog">Add route</button>
+<dialog class="liteedge-dialog liteedge-dialog-lg" id="addRouteDialog"><div class="card border-0"><div class="card-header d-flex justify-content-between"><strong>Add route</strong><button class="btn-close" type="button" data-dialog-close aria-label="Close"></button></div><div class="card-body">
 <form method="post" action="/admin/route/add"><input type="hidden" name="host" value="$(html_escape "$host")">
 <div class="row g-3">
 <div class="col-md-2"><label class="form-label">Match</label><select class="form-select" name="match"><option value="prefix">Prefix</option><option value="exact">Exact</option><option value="regex">Regex</option></select></div>
-<div class="col-md-3"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="/" required></div>
-<div class="col-md-5"><label class="form-label">Reverse proxy target</label><input class="form-control font-monospace" name="target" placeholder="http://app:8080" required></div>
-<div class="col-md-2"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$default_timeout")" required></div>
+<div class="col-md-6"><label class="form-label">Path / pattern</label><input class="form-control font-monospace" name="path" value="/" required></div>
+<div class="col-md-4"><label class="form-label">Timeout (seconds)</label><input class="form-control" type="number" min="1" max="86400" name="timeout" value="$(html_escape "$default_timeout")" required></div>
 </div>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Backends and load balancing</legend>
+$(backend_pool_fields "" "")
+<div class="row g-3 mt-1"><div class="col-md-4"><label class="form-label">Balancing algorithm</label><select class="form-select" name="lb_mode"><option value="round_robin">Round robin</option><option value="least_conn">Least connections</option><option value="ip_hash">Client IP hash</option><option value="cookie">Affinity cookie (HTTPS)</option></select></div><div class="col-md-4"><label class="form-label">Passive failed attempts</label><input class="form-control" type="number" name="max_fails" min="1" max="20" value="3"></div><div class="col-md-4"><label class="form-label">Fail timeout (sec)</label><input class="form-control" type="number" name="fail_timeout" min="1" max="3600" value="30"></div></div></fieldset>
+<fieldset class="border rounded p-3 mt-3"><legend class="float-none w-auto fs-6 px-2">Active health probe</legend>
+<div class="form-check form-switch mb-3"><input class="form-check-input" type="checkbox" name="health_enabled" value="1" id="new_health"><label class="form-check-label" for="new_health">Enable HTTP checks and health events</label></div>
+<div class="row g-3"><div class="col-md-5"><label class="form-label">Probe path</label><input class="form-control" name="health_path" value="/health"></div><div class="col-md-3"><label class="form-label">Expected status</label><input class="form-control" name="health_expect" value="200"></div><div class="col-md-2"><label class="form-label">Interval (sec)</label><input class="form-control" type="number" name="health_interval" min="10" max="3600" value="30"></div><div class="col-md-2"><label class="form-label">Timeout (sec)</label><input class="form-control" type="number" name="health_timeout" min="1" max="3600" value="5"></div><div class="col-md-4"><label class="form-label">Failures before down</label><input class="form-control" type="number" name="health_fall" min="1" max="100" value="3"></div><div class="col-md-4"><label class="form-label">Successes before recovery</label><input class="form-control" type="number" name="health_rise" min="1" max="100" value="2"></div><div class="col-md-4"><label class="form-label">Notification cooldown (sec)</label><input class="form-control" type="number" name="health_cooldown" min="10" max="3600" value="300"></div></div><div class="form-text">Down/recovery events can trigger rules on the Alerts screen.</div></fieldset>
 <div class="border rounded p-3 mt-3">
 <div class="d-flex flex-wrap gap-4 align-items-center mb-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="waf" value="1" id="new_waf" checked><label class="form-check-label fw-semibold" for="new_waf">OWASP CRS</label></div>
@@ -390,6 +467,7 @@ HTML
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="new_https" checked><label class="form-check-label" for="new_https">HTTP → HTTPS</label></div>
 </div>
 <button class="btn btn-outline-primary mt-3" type="submit">Add route</button></form>
+</div></div></dialog>
 </div></div>
 HTML
 }
@@ -536,7 +614,7 @@ HTML
     </div>
     <details class="mb-3">
       <summary class="fw-semibold">Show merge conflict</summary>
-      <pre class="small bg-dark text-light border rounded p-3 mt-2 overflow-auto" style="max-height: 24rem;">$(html_escape "$(cat "$conflict")")</pre>
+      <pre class="small bg-dark text-light border rounded p-3 mt-2 overflow-auto liteedge-pre-scroll">$(html_escape "$(cat "$conflict")")</pre>
     </details>
 HTML
   fi
@@ -545,7 +623,7 @@ HTML
     cat <<HTML
     <details class="mb-3">
       <summary class="fw-semibold">Manual delta</summary>
-      <pre class="small bg-body-tertiary border rounded p-3 mt-2 overflow-auto" style="max-height: 24rem;">$(html_escape "$manual_diff")</pre>
+      <pre class="small bg-body-tertiary border rounded p-3 mt-2 overflow-auto liteedge-pre-scroll">$(html_escape "$manual_diff")</pre>
     </details>
 HTML
   fi
@@ -555,7 +633,7 @@ HTML
     <details class="mb-3">
       <summary class="fw-semibold">Last generated change</summary>
       <div class="form-text mb-2">This is the generated baseline delta from the last successful regeneration, such as adding TLS settings after a certificate is issued.</div>
-      <pre class="small bg-body-tertiary border rounded p-3 mt-2 overflow-auto" style="max-height: 24rem;">$(html_escape "$(cat "$generated_diff")")</pre>
+      <pre class="small bg-body-tertiary border rounded p-3 mt-2 overflow-auto liteedge-pre-scroll">$(html_escape "$(cat "$generated_diff")")</pre>
     </details>
 HTML
   fi
@@ -581,7 +659,11 @@ HTML
 }
 
 certificate_panel() {
-  local host="$1" mode summary
+  local host="$1" mode summary email_file email
+  email_file="$(cert_dir "$host")/acme-email"
+  email=""
+  [[ -s "$email_file" ]] && email="$(head -n1 "$email_file")"
+  [[ -n "$email" ]] || email="${ACME_EMAIL:-}"
   mode="$(cert_mode "$host")"
   summary="$(cert_summary "$host")"
   cat <<HTML
@@ -612,8 +694,13 @@ HTML
         <form method="post" action="/admin/cert/letsencrypt" class="border rounded p-3 h-100">
           <input type="hidden" name="host" value="$(html_escape "$host")">
           <h2 class="h6">Let's Encrypt</h2>
-          <p class="small text-secondary">Use shell-only ACME HTTP-01 issuance. DNS must resolve here and port 80 must be reachable.</p>
-          <button class="btn btn-outline-success" type="submit">Issue / renew Let's Encrypt</button>
+          <p class="small text-secondary">Per-site ACME account. The contact email can differ for every certificate. DNS must resolve here and port 80 must be reachable.</p>
+          <label class="form-label" for="acme_email">Certificate contact email</label>
+          <input class="form-control mb-3" type="email" id="acme_email" name="email" value="$(html_escape "$email")" placeholder="admin@example.com" autocomplete="email" required>
+          <div class="d-flex flex-wrap gap-2">
+            <button class="btn btn-outline-secondary" type="submit" formaction="/admin/cert/email/save">Save email</button>
+            <button class="btn btn-outline-success" type="submit">Issue / renew Let's Encrypt</button>
+          </div>
         </form>
       </div>
     </div>
@@ -663,7 +750,7 @@ plugin_config_panels() {
       <button class="btn btn-sm btn-primary" type="submit">Save configuration</button>
     </div>
   </form>
-</details>
+</div></div></dialog>
 HTML
     done
   done < <(installed_plugin_rows)
@@ -759,12 +846,12 @@ crs_rules_panel() {
     <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-3">
       <div><strong>CRS Rules</strong><span class="text-secondary small ms-2">$(html_escape "$rule_count") actionable rules</span></div>
       <div class="d-flex align-items-center gap-2 flex-grow-1 justify-content-end">
-        <input class="form-control form-control-sm" id="crsRuleSearch" style="max-width:28rem" type="search" placeholder="Search ID, message, PL, or rule file">
+        <input class="form-control form-control-sm liteedge-crs-search" id="crsRuleSearch" type="search" placeholder="Search ID, message, PL, or rule file">
         <button class="btn-close" type="button" data-dialog-close aria-label="Close"></button>
       </div>
     </div>
     <div class="card-body pb-2"><p class="text-secondary mb-0">Enable or disable core CRS rules globally. Route-only exclusions remain in the route editor.</p></div>
-    <div class="table-responsive" style="max-height:70vh;overflow:auto">
+    <div class="table-responsive liteedge-crs-rules">
       <table class="table table-sm align-middle mb-0">
         <thead class="sticky-top bg-body"><tr><th>ID</th><th>Rule</th><th>PL</th><th>Source</th><th>Status</th><th class="text-end">Action</th></tr></thead>
         <tbody id="crsRuleTable">
@@ -909,13 +996,14 @@ HTML
 }
 
 server_page() {
-  local worker keepalive header body send route resolver
+  local worker keepalive header body send route resolver smtp_config
   worker="$(server_setting_get WORKER_CONNECTIONS 1024)"; keepalive="$(server_setting_get KEEPALIVE_TIMEOUT 65)"
   header="$(server_setting_get CLIENT_HEADER_TIMEOUT 15)"; body="$(server_setting_get CLIENT_BODY_TIMEOUT 15)"
   send="$(server_setting_get SEND_TIMEOUT 30)"; route="$(server_setting_get DEFAULT_ROUTE_TIMEOUT 60)"; resolver="$(server_setting_get RESOLVER "")"
+  smtp_config="$(/opt/liteedge/bin/obsctl.sh collector)"
   page_head "Server Settings"
   cat <<HTML
-<div class="mb-4"><h1 class="h3 mb-1">Server Settings</h1><p class="text-secondary mb-0">Global NGINX runtime defaults.</p></div>
+<div class="mb-4"><h1 class="h3 mb-1">Server Settings</h1><p class="text-secondary mb-0">NGINX defaults, SMTP notification delivery, log export, and administrator access.</p></div>
 <form method="post" action="/admin/server/save" class="card shadow-sm"><div class="card-header"><strong>NGINX defaults</strong></div><div class="card-body"><div class="row g-3">
 <div class="col-md-4"><label class="form-label">Worker connections</label><input class="form-control" type="number" name="worker_connections" value="$(html_escape "$worker")" required></div>
 <div class="col-md-4"><label class="form-label">Keepalive timeout</label><input class="form-control" type="number" name="keepalive_timeout" value="$(html_escape "$keepalive")" required></div>
@@ -925,6 +1013,38 @@ server_page() {
 <div class="col-md-4"><label class="form-label">Send timeout</label><input class="form-control" type="number" name="send_timeout" value="$(html_escape "$send")" required></div>
 <div class="col-md-6"><label class="form-label">DNS resolver</label><input class="form-control font-monospace" name="resolver" value="$(html_escape "$resolver")" placeholder="Automatic from /etc/resolv.conf"><div class="form-text">Leave blank for automatic detection.</div></div>
 </div></div><div class="card-footer text-end"><button class="btn btn-primary">Save server settings</button></div></form>
+<section class="card shadow-sm mt-4" aria-labelledby="smtpHeading">
+  <div class="card-header"><strong id="smtpHeading">SMTP email for alerts</strong></div>
+  <form method="post" action="/admin/server/smtp/save">
+    <div class="card-body">
+      <p class="text-secondary">Configure email alerts independently of log export. Outgoing SMTP uses STARTTLS with server certificate verification.</p>
+      <div class="row g-3">
+        <div class="col-md-6"><label class="form-label" for="smtp_host">SMTP host</label><input class="form-control" id="smtp_host" name="smtp_host" value="$(html_escape "$(jq -r '.smtp_host // ""' <<< "$smtp_config")")" placeholder="smtp.example.com" autocomplete="off"></div>
+        <div class="col-md-2"><label class="form-label" for="smtp_port">STARTTLS port</label><input class="form-control" id="smtp_port" type="number" name="smtp_port" min="1" max="65535" value="$(html_escape "$(jq -r '.smtp_port // 587' <<< "$smtp_config")")" required></div>
+        <div class="col-md-4"><label class="form-label" for="mail_from">From address</label><input class="form-control" id="mail_from" name="mail_from" type="email" value="$(html_escape "$(jq -r '.mail_from // ""' <<< "$smtp_config")")" placeholder="alerts@example.com"></div>
+        <div class="col-md-6"><label class="form-label" for="smtp_user">SMTP username</label><input class="form-control" id="smtp_user" name="smtp_user" value="$(html_escape "$(jq -r '.smtp_user // ""' <<< "$smtp_config")")" autocomplete="off"></div>
+        <div class="col-md-6"><label class="form-label" for="smtp_password">SMTP password</label><input class="form-control" type="password" id="smtp_password" name="smtp_password" autocomplete="new-password" placeholder="Leave blank to keep existing password"><div class="form-text">Saved passwords are never returned to this page.</div></div>
+      </div>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center flex-wrap gap-2"><small class="text-secondary">Use an email destination on the <a href="/admin/alerts">Alerts</a> page to receive notifications.</small><button class="btn btn-primary" type="submit">Save SMTP settings</button></div>
+  </form>
+</section>
+HTML
+  collector_panel
+  cat <<HTML
+<section class="card shadow-sm mt-4" aria-labelledby="passwordHeading">
+  <div class="card-header"><strong id="passwordHeading">Administrator password</strong></div>
+  <form method="post" action="/admin/password/change" data-native-submit>
+    <div class="card-body"><p class="text-secondary">Change the administrator password. It is stored in persistent LiteEdge configuration, including after Docker rebuilds.</p>
+      <div class="row g-3">
+        <div class="col-md-6"><label class="form-label" for="current_admin_password">Current password</label><input class="form-control" id="current_admin_password" name="current_password" type="password" autocomplete="current-password" required></div>
+        <div class="col-md-6"><label class="form-label" for="new_admin_password">New password</label><input class="form-control" id="new_admin_password" name="new_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></div>
+        <div class="col-md-6"><label class="form-label" for="confirm_admin_password">Confirm new password</label><input class="form-control" id="confirm_admin_password" name="confirm_password" type="password" autocomplete="new-password" minlength="10" maxlength="128" required></div>
+      </div>
+    </div>
+    <div class="card-footer d-flex align-items-center justify-content-between flex-wrap gap-2"><small class="text-secondary">You will need to sign in again with your new password.</small><button class="btn btn-primary" type="submit">Change admin password</button></div>
+  </form>
+</section>
 HTML
   page_tail
 }
@@ -998,13 +1118,27 @@ handle_export() {
 }
 
 handle_raw_import() {
-  local certificates length tmp output size
+  local certificates length tmp output size expected_scope expected_host
   [[ "${REQUEST_METHOD:-GET}" == POST ]] || {
     printf 'Status: 405 Method Not Allowed\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nPOST required.\n'
     exit 0
   }
 
   certificates="$(bool_value "${PARAM[certificates]:-0}")"
+  expected_scope="${PARAM[scope]:-}"
+  expected_host="${PARAM[host]:-}"
+  # The global import allows manifest auto-detection. A scoped import must
+  # constrain both scope and host before any files can be replaced.
+  if [[ -n "$expected_scope" || -n "$expected_host" ]]; then
+    if [[ "$expected_scope" != site || -z "$expected_host" ]]; then
+      printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nA scoped import requires scope=site and a host.\n'
+      exit 0
+    fi
+    if ! [[ "$expected_host" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]; then
+      printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\n\r\nInvalid import host.\n'
+      exit 0
+    fi
+  fi
   length="${CONTENT_LENGTH:-0}"
   [[ "$length" =~ ^[0-9]+$ ]] || length=0
   if (( length < 1 || length > 33554432 )); then
@@ -1021,9 +1155,9 @@ handle_raw_import() {
     exit 0
   fi
 
-  # Scope and site identity come from the signed-off LiteEdge bundle manifest.
-  # Empty expected-scope/host values intentionally enable auto-detection.
-  if ! output="$(/opt/liteedge/bin/bundlectl.sh import "$tmp/bundle.tar.gz" "$certificates" "" "" 2>&1)"; then
+  # The bundle manifest is validated against the caller's expected scope and
+  # host by bundlectl before any changes are applied.
+  if ! output="$(/opt/liteedge/bin/bundlectl.sh import "$tmp/bundle.tar.gz" "$certificates" "$expected_scope" "$expected_host" 2>&1)"; then
     printf 'Status: 400 Bad Request\r\nContent-Type: text/plain; charset=utf-8\r\nCache-Control: no-store\r\n\r\n'
     printf '%s\n' "$output"
     exit 0
@@ -1066,6 +1200,220 @@ handle_crs_raw_import() {
   exit 0
 }
 
+# All log searches and exports are bounded and use a typed jq filter, never shell eval.
+log_query() {
+  /opt/liteedge/bin/obsctl.sh query "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[port]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[search]:-}" "${PARAM[limit]:-100}" "${PARAM[since]:-0}" "${PARAM[scopes_json]:-}"
+}
+
+# A deliberate request with at least one real filter is required before
+# opening the event log; limits and an empty host scope are not filters.
+log_has_filter() {
+  [[ -n "${PARAM[host]:-}" || -n "${PARAM[route]:-}" ||
+     -n "${PARAM[port]:-}" || -n "${PARAM[method]:-}" ||
+     -n "${PARAM[status]:-}" || -n "${PARAM[search]:-}" ||
+     "${PARAM[type]:-all}" != all ||
+     "${PARAM[since]:-0}" =~ ^0*[1-9][0-9]*$ ||
+     ( -n "${PARAM[scopes_json]:-}" && "${PARAM[scopes_json]:-}" != '[]' ) ]]
+}
+
+logs_page() {
+  local events event kind badge_color type port method status search limit since catalog item name site route_value
+  type="$(html_escape "${PARAM[type]:-all}")"
+  catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+  port="$(html_escape "${PARAM[port]:-}")"; method="$(html_escape "${PARAM[method]:-}")"; status="$(html_escape "${PARAM[status]:-}")"
+  search="$(html_escape "${PARAM[search]:-}")"; limit="$(html_escape "${PARAM[limit]:-100}")"; since="$(html_escape "${PARAM[since]:-0}")"
+  local requested=0 valid_filter=0 result_count=0
+  [[ "${PARAM[apply]:-}" == 1 ]] && requested=1
+  if log_has_filter; then valid_filter=1; fi
+  # Never open event logs on the initial GET, or for a request with no filter.
+  events=""
+  if (( requested && valid_filter )); then
+    if ! events="$(log_query 2>&1)"; then error_page "$events"; fi
+    if [[ -n "$events" ]]; then result_count="$(printf '%s\n' "$events" | wc -l)"; fi
+  fi
+  page_head "Logs"
+  cat <<HTML
+<div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">Request and WAF logs</h1><p class="text-secondary mb-0">Choose filters, then click Search logs. Opening this page does not query the event store.</p></div><div class="d-flex gap-2">
+HTML
+  if (( requested && valid_filter )); then
+    cat <<HTML
+<a class="btn btn-outline-secondary" href="/admin/logs/export?format=jsonl&amp;$(html_escape "${QUERY_STRING:-}")">Export JSONL</a><a class="btn btn-outline-secondary" href="/admin/logs/export?format=csv&amp;$(html_escape "${QUERY_STRING:-}")">Export CSV</a>
+HTML
+  fi
+  cat <<HTML
+</div></div>
+<form action="/admin/logs" method="get" id="logFilterForm" class="card mb-3 shadow-sm" data-log-initial-scopes="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="scopes_json" value="$(html_escape "${PARAM[scopes_json]:-[]}")"><input type="hidden" name="apply" value="1"><div class="card-body"><div class="row g-2">
+<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">All</option><option value="http">HTTP</option><option value="waf">WAF rules</option><option value="health">Health probes</option></select></div>
+<div class="col-md-5"><label class="form-label" for="logHostButton">Hosts and aliases</label><div class="position-relative" data-log-picker="hosts">
+<button class="form-select text-start" type="button" id="logHostButton" data-log-toggle="hosts" aria-expanded="false" aria-controls="logHostOptions">All hosts (select to filter)</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="logHostOptions" hidden><div class="text-secondary small px-2 pb-2">Select multiple configured hosts or aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    name="$(jq -r '.name' <<< "$item")"; site="$(jq -r '.site' <<< "$item")"; kind="$(jq -r '.kind' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded"><input type="checkbox" class="form-check-input mt-0" data-log-host data-site="$(html_escape "$site")" value="$(html_escape "$name")"><span>$(html_escape "$name")</span><span class="small text-secondary ms-auto">$(html_escape "$kind")</span></label>
+HTML
+  done < <(jq -c '.hosts[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Nothing selected includes every host.</div></div>
+<div class="col-md-5"><label class="form-label" for="logRouteButton">Routes</label><div class="position-relative" data-log-picker="routes">
+<button class="form-select text-start" type="button" id="logRouteButton" data-log-toggle="routes" aria-expanded="false" aria-controls="logRouteOptions" disabled>Select hosts first</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="logRouteOptions" hidden><div class="text-secondary small px-2 pb-2">Routes for the selected hosts and aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    site="$(jq -r '.site' <<< "$item")"; route_value="$(jq -r '.route' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded" data-log-route-item data-site="$(html_escape "$site")" hidden><input type="checkbox" class="form-check-input mt-0" data-log-route data-site="$(html_escape "$site")" value="$(html_escape "$route_value")"><span class="text-truncate">$(html_escape "$route_value")</span><span class="small text-secondary ms-auto">$(html_escape "$site")</span></label>
+HTML
+  done < <(jq -c '.routes[]' <<< "$catalog")
+  cat <<HTML
+</div></div><div class="form-text">Routes are filtered by the selected hosts. No routes selected means all their routes.</div></div>
+<div class="col-md-2"><label class="form-label">Listener port</label><input class="form-control" type="number" min="1" max="65535" name="port" value="$port" placeholder="443"></div>
+<div class="col-md-2"><label class="form-label">HTTP method</label><select class="form-select" name="method"><option value="">All methods</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select></div>
+<div class="col-md-2"><label class="form-label">Status</label><select class="form-select" name="status"><option value="">All statuses</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option>200</option><option>201</option><option>301</option><option>400</option><option>401</option><option>403</option><option>404</option><option>429</option><option>500</option><option>502</option><option>503</option></select></div>
+<div class="col-md-6"><label class="form-label">Search text</label><input class="form-control" name="search" value="$search" autocomplete="off" placeholder="Path, rule ID, message, IP or request ID"></div>
+<div class="col-md-2"><label class="form-label">Since (Unix seconds)</label><input class="form-control" type="number" min="0" name="since" value="$since"></div>
+<div class="col-md-2"><label class="form-label">Max results</label><input class="form-control" type="number" min="1" max="1000" name="limit" value="$limit"></div>
+<div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit" id="logSearchButton"><span id="logSearchSpinner" class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true" hidden></span><span id="logSearchButtonLabel">Search logs</span></button></div>
+</div><div id="logSearchFeedback" role="status" aria-live="polite" class="small mt-3 text-secondary" hidden>Searching logs. Please wait…</div></div></form>
+HTML
+  if (( !requested )); then
+    echo '<div class="alert alert-info" role="status">No log search has run. Select at least one filter and choose <strong>Search logs</strong> to load results.</div>'
+    page_tail
+    return
+  fi
+  if (( !valid_filter )); then
+    echo '<div class="alert alert-warning" role="status">Choose at least one filter (such as a hostname, event type, HTTP status, or search term) before searching. No logs were loaded.</div>'
+    page_tail
+    return
+  fi
+  if (( result_count == 0 )); then
+    echo '<div class="alert alert-info" role="status">No log entries matched your filters. Try broadening the search.</div>'
+    page_tail
+    return
+  fi
+  printf '<p class="small text-secondary" role="status">Showing %s matching log entries.</p>\n' "$result_count"
+  cat <<'HTML'
+<div class="card"><div class="table-responsive"><table class="table table-sm table-hover align-middle"><thead><tr><th>Time</th><th>Type</th><th>Host / route</th><th>Port</th><th>Method</th><th>HTTP</th><th>Client</th><th>URI / WAF finding</th><th>Decision</th></tr></thead><tbody>
+HTML
+  while IFS= read -r event; do
+    [[ -n "$event" ]] || continue
+    kind="$(jq -r '.type // ""' <<< "$event")"
+    badge_color=secondary
+    [[ "$kind" == waf ]] && badge_color=warning
+    [[ "$kind" == health ]] && badge_color=info
+    cat <<HTML
+<tr><td class="text-nowrap">$(html_escape "$(jq -r '.timestamp // ""' <<< "$event")")</td><td><span class="badge text-bg-$badge_color">$(html_escape "$kind")</span></td><td>$(html_escape "$(jq -r '.host // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r '.route // ""' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.port // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.method // ""' <<< "$event")")</td><td>$(html_escape "$(jq -r '.status // ""' <<< "$event")")</td><td class="font-monospace">$(html_escape "$(jq -r '.ip // ""' <<< "$event")")</td><td class="text-break">$(html_escape "$(jq -r '.uri // ""' <<< "$event")")<div class="text-secondary small">$(html_escape "$(jq -r 'if .type=="waf" then "Rule \(.rule_id): \(.message)" elif .type=="health" then "\(.message // "") (probe status \(.probe_status // ""))" else "Request \(.request_id // "")" end' <<< "$event")")</div></td><td>$(html_escape "$(jq -r '.action // ""' <<< "$event")")</td></tr>
+HTML
+  done <<< "$events"
+  echo '</tbody></table></div></div>'
+  page_tail
+}
+
+logs_export() {
+  local format="${PARAM[format]:-jsonl}" query_output
+  [[ "$format" == jsonl || "$format" == csv ]] || error_page 'Unsupported export format.'
+  # Exports cannot bypass the explicit-search requirement.
+  if [[ "${PARAM[apply]:-}" != 1 ]] || ! log_has_filter; then
+    error_page 'Choose and apply at least one log filter before exporting.'
+  fi
+  if ! query_output="$(log_query 2>&1)"; then error_page "$query_output"; fi
+  if [[ "$format" == jsonl ]]; then
+    printf 'Content-Type: application/x-ndjson\r\nContent-Disposition: attachment; filename="liteedge-logs.jsonl"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
+    printf '%s\n' "$query_output"
+  else
+    printf 'Content-Type: text/csv; charset=utf-8\r\nContent-Disposition: attachment; filename="liteedge-logs.csv"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
+    printf 'timestamp,type,host,route,port,method,status,ip,uri,rule_id,message,action,request_id\r\n'
+    printf '%s\n' "$query_output" | jq -r '[.timestamp,.type,.host,.route,.port,.method,.status,.ip,.uri,.rule_id,.message,.action,.request_id] | map((. // "" | tostring) | if test("^[=+@-]") then "\u0027"+. else . end) | @csv'
+  fi
+  exit 0
+}
+
+alerts_page() {
+  local alerts rule catalog item name kind site route_value
+  alerts="$(/opt/liteedge/bin/obsctl.sh alerts)"
+  catalog="$(/opt/liteedge/bin/alert-catalog.sh)"
+  page_head "Alerts"
+  cat <<'HTML'
+<h1 class="h3">Alerts</h1><p class="text-secondary">A rule matches events in a rolling time window, triggers at a threshold, and delivers an email or HTTPS webhook. Choose Backend health + Backend down + Count 1 to alert on a probe outage. Recovered matches recovery events. Passive failure detection remains managed by NGINX.</p>
+<div class="card mb-3"><div class="card-header"><strong>Configured alert rules</strong></div><div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Name</th><th>Condition</th><th>Trigger</th><th>Action</th><th></th></tr></thead><tbody>
+HTML
+  while IFS= read -r rule; do
+    [[ -n "$rule" ]] || continue
+    cat <<HTML
+<tr><td>$(html_escape "$(jq -r '.name' <<< "$rule")")</td><td>$(html_escape "$(jq -r '[(.type // "all"), (if (.scopes|type)=="array" then ([.scopes[] | .host + (if (.routes|length)>0 then " ["+(.routes|join(", "))+"]" else "" end)] | join(", ")) else (.host // "")+" "+(.route // "") end),.method,.status,.action,.search] | map(select(.!="")) | join(" / ")' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.threshold) event(s) / \(.window)s; cooldown \(.cooldown)s"' <<< "$rule")")</td><td>$(html_escape "$(jq -r '"\(.channel) → \(.target)"' <<< "$rule")")</td><td><div class="d-flex gap-1"><button class="btn btn-sm btn-outline-primary" type="button" data-alert-edit="$(html_escape "$rule")">Edit</button><form method="post" action="/admin/alerts/delete"><input type="hidden" name="id" value="$(html_escape "$(jq -r '.id' <<< "$rule")")"><button class="btn btn-sm btn-outline-danger">Delete</button></form></div></td></tr>
+HTML
+  done < <(jq -c '.[]' <<< "$alerts")
+  cat <<'HTML'
+</tbody></table></div></div>
+<div class="card"><div class="card-header"><strong>Create or update alert</strong></div><div class="card-body"><form id="alertRuleForm" method="post" action="/admin/alerts/save"><input type="hidden" name="scopes_json" value="[]"><div class="row g-3">
+<div class="col-md-3"><label class="form-label">Rule ID</label><input class="form-control" name="id" pattern="[A-Za-z0-9_-]+" maxlength="48" required placeholder="high-error-rate"></div>
+<div class="col-md-5"><label class="form-label">Description</label><input class="form-control" name="name" required maxlength="100" placeholder="5xx spike"></div>
+<div class="col-md-2"><label class="form-label">Event type</label><select class="form-select" name="type"><option value="all">Any</option><option value="http">HTTP</option><option value="waf">WAF match</option><option value="health">Backend health</option></select></div>
+<div class="col-md-2"><label class="form-label">Event action</label><select class="form-select" name="action"><option value="any">Any</option><option value="blocked">Blocked</option><option value="matched">Matched</option><option value="down">Backend down</option><option value="up">Recovered</option></select></div>
+<div class="col-md-6"><label class="form-label" for="alertHostButton">Hosts and aliases</label>
+<div class="position-relative" data-alert-picker="hosts">
+<button class="form-select text-start" type="button" id="alertHostButton" data-alert-toggle="hosts" aria-expanded="false" aria-controls="alertHostOptions">All hosts (select to restrict)</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="alertHostOptions" hidden><div class="text-secondary small px-2 pb-2">Choose one or more configured hosts or aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    name="$(jq -r '.name' <<< "$item")"; site="$(jq -r '.site' <<< "$item")"; kind="$(jq -r '.kind' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded"><input type="checkbox" class="form-check-input mt-0" data-alert-host data-site="$(html_escape "$site")" value="$(html_escape "$name")"><span>$(html_escape "$name")</span><span class="small text-secondary ms-auto">$(html_escape "$kind")</span></label>
+HTML
+  done < <(jq -c '.hosts[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Leave unselected for all hosts. Alias selections apply to their own hostname.</div></div>
+<div class="col-md-6"><label class="form-label" for="alertRouteButton">Routes</label>
+<div class="position-relative" data-alert-picker="routes">
+<button class="form-select text-start" type="button" id="alertRouteButton" data-alert-toggle="routes" aria-expanded="false" aria-controls="alertRouteOptions" disabled>Select hosts first</button>
+<div class="alert-option-menu border rounded bg-body shadow p-2" id="alertRouteOptions" hidden><div class="text-secondary small px-2 pb-2">Routes for selected hosts and aliases</div>
+HTML
+  while IFS= read -r item; do
+    [[ -n "$item" ]] || continue
+    site="$(jq -r '.site' <<< "$item")"; route_value="$(jq -r '.route' <<< "$item")"
+    cat <<HTML
+<label class="dropdown-item d-flex align-items-center gap-2 rounded" data-alert-route-item data-site="$(html_escape "$site")" hidden><input type="checkbox" class="form-check-input mt-0" data-alert-route data-site="$(html_escape "$site")" value="$(html_escape "$route_value")"><span class="text-truncate">$(html_escape "$route_value")</span><span class="small text-secondary ms-auto">$(html_escape "$site")</span></label>
+HTML
+  done < <(jq -c '.routes[]' <<< "$catalog")
+  cat <<'HTML'
+</div></div><div class="form-text">Automatically limited to selected hosts. No route selection means all routes for those hosts.</div></div>
+<div class="col-md-3"><label class="form-label">HTTP method</label><select class="form-select" name="method"><option value="">Any</option><option>GET</option><option>POST</option><option>PUT</option><option>DELETE</option><option>PATCH</option></select></div>
+<div class="col-md-3"><label class="form-label">HTTP status / class</label><input class="form-control" name="status" placeholder="e.g. 5xx or 403"></div>
+<div class="col-md-5"><label class="form-label">Contains text</label><input class="form-control" name="search" placeholder="Optional message / URI / rule ID"></div>
+<div class="col-md-2"><label class="form-label">Count ≥</label><input class="form-control" type="number" min="1" max="10000" name="threshold" value="5" required></div>
+<div class="col-md-2"><label class="form-label">Window (sec)</label><input class="form-control" type="number" min="10" max="86400" name="window" value="60" required></div>
+<div class="col-md-3"><label class="form-label">Cooldown (sec)</label><input class="form-control" type="number" min="10" max="604800" name="cooldown" value="300" required></div>
+<div class="col-md-3"><label class="form-label">Notification type</label><select class="form-select" name="channel"><option value="webhook">HTTPS webhook</option><option value="email">Email via SMTP</option></select></div>
+<div class="col-md-9"><label class="form-label">Destination URL or email</label><input class="form-control" name="target" required placeholder="https://hooks.example.com/notify"></div>
+</div><button class="btn btn-primary mt-3">Save alert rule</button></form></div></div>
+HTML
+  page_tail
+}
+
+collector_panel() {
+  local config mode
+  config="$(/opt/liteedge/bin/obsctl.sh collector)"
+  mode="$(jq -r '.mode // "off"' <<< "$config")"
+  cat <<HTML
+<section class="card shadow-sm mt-4" id="log-export" aria-labelledby="logExportHeading"><div class="card-header"><strong id="logExportHeading">Log Export</strong></div><p class="text-secondary px-3 pt-3 mb-0">Forward structured JSON events to syslog or HTTPS collectors. Local logging continues if the remote collector fails.</p>
+<form method="post" action="/admin/collector/save"><div class="card-body"><div class="row g-3">
+<div class="col-md-4"><label class="form-label">Log export transport</label><select name="mode" class="form-select" data-selected="$mode"><option value="off">Disabled</option><option value="syslog">Syslog RFC 5424</option><option value="https">HTTPS collector</option></select></div>
+<div class="col-md-4"><label class="form-label">Syslog server</label><input class="form-control" name="host" value="$(html_escape "$(jq -r '.host // ""' <<< "$config")")" placeholder="logs.internal.example"></div>
+<div class="col-md-2"><label class="form-label">Syslog port</label><input class="form-control" type="number" name="port" value="$(html_escape "$(jq -r '.port // 514' <<< "$config")")"></div>
+<div class="col-md-2"><label class="form-label">Syslog transport</label><select class="form-select" name="protocol" data-selected="$(html_escape "$(jq -r '.protocol // "udp"' <<< "$config")")"><option>udp</option><option>tcp</option><option>tls</option></select></div>
+<div class="col-md-4"><label class="form-label">HTTP collector provider</label><select class="form-select" name="provider" data-selected="$(html_escape "$(jq -r '.provider // "generic"' <<< "$config")")"><option>generic</option><option>splunk</option><option>datadog</option><option>elastic</option></select></div>
+<div class="col-md-8"><label class="form-label">HTTPS collector endpoint</label><input class="form-control" name="url" value="$(html_escape "$(jq -r '.url // ""' <<< "$config")")" placeholder="https://collector.example.com/events"></div>
+<div class="col-md-12"><label class="form-label">API token (leave blank to keep existing)</label><input class="form-control" type="password" autocomplete="new-password" name="token"></div>
+</div></div><div class="card-footer text-end"><button class="btn btn-primary">Save export configuration</button></div></form>
+<p class="small text-secondary px-3 mt-3">Delivery status and retry errors are recorded in <code>/data/logs/observability-worker.log</code>. Events and configuration persist under <code>/data</code>. Restrict collector endpoints to trusted destinations.</p>
+</section>
+HTML
+}
+
 handle_post() {
   local path="$1" host output tmpdir plugins
   [[ "${REQUEST_METHOD:-GET}" == POST ]] || error_page "This action requires POST."
@@ -1077,6 +1425,18 @@ handle_post() {
       redirect "/admin/site?host=$host"
       ;;
 
+    /admin/site/enable|/admin/site/disable)
+      host="${PARAM[host]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh "${path##*/}" "$host"
+      # Return to the caller's page; only an allowlisted context is accepted.
+      # Keep the site editor as the default for legacy API clients.
+      if [[ "${PARAM[return_to]:-site}" == overview ]]; then
+        redirect "/"
+      else
+        redirect "/admin/site?host=$host"
+      fi
+      ;;
+
     /admin/site/delete)
       host="${PARAM[host]:-}"
       run_or_error /opt/liteedge/bin/sitectl.sh delete "$host"
@@ -1086,14 +1446,14 @@ handle_post() {
     /admin/route/add)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
       redirect "/admin/site?host=$host"
       ;;
 
     /admin/route/save)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
       redirect "/admin/site?host=$host"
       ;;
 
@@ -1109,9 +1469,15 @@ handle_post() {
       redirect "/admin/site?host=$host"
       ;;
 
+    /admin/cert/email/save)
+      host="${PARAM[host]:-}"
+      run_or_error /opt/liteedge/bin/certctl.sh set-email "$host" "${PARAM[email]:-}"
+      redirect "/admin/site?host=$host"
+      ;;
+
     /admin/cert/letsencrypt)
       host="${PARAM[host]:-}"
-      run_or_error /opt/liteedge/bin/certctl.sh letsencrypt "$host"
+      run_or_error /opt/liteedge/bin/certctl.sh letsencrypt "$host" "${PARAM[email]:-}"
       redirect "/admin/site?host=$host"
       ;;
 
@@ -1203,6 +1569,37 @@ handle_post() {
       run_or_error /opt/liteedge/bin/wafctl.sh custom-delete "${PARAM[rule_id]:-}"
       redirect "/admin/owasp"
       ;;
+    /admin/alerts/save)
+      run_or_error /opt/liteedge/bin/obsctl.sh alert-save "${PARAM[id]:-}" "${PARAM[name]:-}" "${PARAM[type]:-all}" "${PARAM[host]:-}" "${PARAM[route]:-}" "${PARAM[method]:-}" "${PARAM[status]:-}" "${PARAM[action]:-any}" "${PARAM[threshold]:-5}" "${PARAM[window]:-60}" "${PARAM[cooldown]:-300}" "${PARAM[channel]:-webhook}" "${PARAM[target]:-}" "${PARAM[search]:-}" "${PARAM[scopes_json]:-[]}"
+      redirect "/admin/alerts"
+      ;;
+    /admin/alerts/delete)
+      run_or_error /opt/liteedge/bin/obsctl.sh alert-delete "${PARAM[id]:-}"
+      redirect "/admin/alerts"
+      ;;
+    /admin/collector/save)
+      run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}"
+      redirect "/admin/server#log-export"
+      ;;
+    /admin/password/change)
+      output=""
+      if ! output="$(printf '%s\n%s\n%s\n' "${PARAM[current_password]:-}" "${PARAM[new_password]:-}" "${PARAM[confirm_password]:-}" | /opt/liteedge/bin/adminctl.sh change-password 2>&1)"; then
+        error_page "$output"
+      fi
+      if [[ "${API_MODE:-0}" == 1 ]]; then api_success '{"ok":true,"reauthenticate":true}'; fi
+      page_head "Password changed"
+      cat <<'HTML'
+<div class="alert alert-success" role="status"><h1 class="h5">Administrator password updated</h1><p class="mb-0">The new password is active and saved. Open Server Settings again and authenticate with your new password.</p></div>
+<a class="btn btn-primary" href="/admin/server">Return to Server Settings</a>
+HTML
+      page_tail
+      ;;
+
+    /admin/server/smtp/save)
+      run_or_error /opt/liteedge/bin/obsctl.sh smtp-save "${PARAM[smtp_host]:-}" "${PARAM[smtp_port]:-587}" "${PARAM[smtp_user]:-}" "${PARAM[smtp_password]:-}" "${PARAM[mail_from]:-}"
+      redirect "/admin/server"
+      ;;
+
     /admin/server/save)
       run_or_error /opt/liteedge/bin/serverctl.sh save "${PARAM[worker_connections]:-1024}" "${PARAM[keepalive_timeout]:-65}" "${PARAM[header_timeout]:-15}" "${PARAM[body_timeout]:-15}" "${PARAM[send_timeout]:-30}" "${PARAM[route_timeout]:-60}" "${PARAM[resolver]:-}"
       redirect "/admin/server"
@@ -1233,6 +1630,38 @@ handle_post() {
 
 path="${PATH_INFO:-/}"
 parse_params "${QUERY_STRING:-}"
+if [[ "$path" == /api/v1/* ]]; then
+  if [[ "${REQUEST_METHOD:-GET}" == POST && "$path" == /api/v1/actions/* ]]; then
+    length="${CONTENT_LENGTH:-0}"
+    if [[ "$length" =~ ^[0-9]+$ ]] && (( length > 0 )); then
+      body=""; IFS= read -r -N "$length" body || true; parse_params "$body"
+    fi
+  fi
+  # shellcheck disable=SC1091
+  source /opt/liteedge/cgi/api.sh
+  api_entry "$path"
+  exit 0
+fi
+
+# Old HTML bookmarks enter the SPA. Only the optional compatibility test mode
+# can reach the former server-rendered pages; the production UI never can.
+if [[ "${REQUEST_METHOD:-GET}" == GET && "${LITEEDGE_ALLOW_LEGACY_UI:-0}" != 1 ]]; then
+  case "$path" in
+    /admin/site)
+      host="${PARAM[host]:-}"
+      if [[ -n "$host" ]]; then
+        validate_host "$host" 2>/dev/null || error_page 'Invalid hostname.'
+        redirect "/#/site/$host"
+      fi
+      redirect '/#/sites'
+      ;;
+    /admin/owasp) redirect '/#/owasp' ;;
+    /admin/server|/admin/collector) redirect '/#/server' ;;
+    /admin/logs) redirect '/#/logs' ;;
+    /admin/alerts) redirect '/#/alerts' ;;
+    /admin|/admin/) redirect '/#/sites' ;;
+  esac
+fi
 
 if [[ "$path" == /admin/export ]]; then
   handle_export
@@ -1265,7 +1694,11 @@ case "$path" in
   /admin/site) site_editor ;;
   /admin/owasp) owasp_page ;;
   /admin/server) server_page ;;
-  /admin/site/save|/admin/site/delete|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/server/save|/admin/config/save|/admin/config/reset)
+  /admin/logs) logs_page ;;
+  /admin/logs/export) logs_export ;;
+  /admin/alerts) alerts_page ;;
+  /admin/collector) redirect "/admin/server#log-export" ;;
+  /admin/site/save|/admin/site/delete|/admin/site/enable|/admin/site/disable|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/server/smtp/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)
     handle_post "$path" ;;
   *)
     page_head "Not found"

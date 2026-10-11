@@ -1,6 +1,6 @@
 services:
   liteedge:
-    image: "ghcr.io/theonemule/docker-waf:${LITEEDGE_VERSION:-latest}"
+    image: "ghcr.io/${LITEEDGE_REPO:-theonemule/docker-waf}:${LITEEDGE_VERSION:-latest}"
     container_name: liteedge
     restart: unless-stopped
     init: true
@@ -15,15 +15,19 @@ services:
     ports:
       - "80:8080"
       - "443:8443"
+      # Private by default. Set LITEEDGE_ADMIN_BIND_IP to a trusted LAN IP for access.
+      - "${LITEEDGE_ADMIN_BIND_IP:-127.0.0.1}:${LITEEDGE_ADMIN_EXTERNAL_PORT:-8443}:9443"
     environment:
       ADMIN_USER: "${ADMIN_USER:-admin}"
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}"
       ACME_EMAIL: "${ACME_EMAIL:-}"
       TZ: "${TZ:-UTC}"
+      LITEEDGE_ADMIN_HTTP_ONLY: "${LITEEDGE_ADMIN_HTTP_ONLY:-0}"
       DATA_DIR: /data
       LITEEDGE_RUN_DIR: /tmp/liteedge-run
       LITEEDGE_HTTP_PORT: "8080"
       LITEEDGE_HTTPS_PORT: "8443"
+      LITEEDGE_ADMIN_HTTPS_PORT: "9443"
       LITEEDGE_BIND_ADDRESS: "0.0.0.0"
       LITEEDGE_PUBLIC_HTTPS_PORT: "443"
     volumes:
