@@ -1183,12 +1183,12 @@ HTML
 <label class="dropdown-item d-flex align-items-center gap-2 rounded" data-log-route-item data-site="$(html_escape "$site")" hidden><input type="checkbox" class="form-check-input mt-0" data-log-route data-site="$(html_escape "$site")" value="$(html_escape "$route_value")"><span class="text-truncate">$(html_escape "$route_value")</span><span class="small text-secondary ms-auto">$(html_escape "$site")</span></label>
 HTML
   done < <(jq -c '.routes[]' <<< "$catalog")
-  cat <<'HTML'
+  cat <<HTML
 </div></div><div class="form-text">Routes are filtered by the selected hosts. No routes selected means all their routes.</div></div>
 <div class="col-md-2"><label class="form-label">Listener port</label><input class="form-control" type="number" min="1" max="65535" name="port" value="$port" placeholder="443"></div>
 <div class="col-md-2"><label class="form-label">HTTP method</label><select class="form-select" name="method"><option value="">All methods</option><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option><option>HEAD</option><option>OPTIONS</option></select></div>
 <div class="col-md-2"><label class="form-label">Status</label><select class="form-select" name="status"><option value="">All statuses</option><option>2xx</option><option>3xx</option><option>4xx</option><option>5xx</option><option>200</option><option>201</option><option>301</option><option>400</option><option>401</option><option>403</option><option>404</option><option>429</option><option>500</option><option>502</option><option>503</option></select></div>
-<div class="col-md-6"><label class="form-label">Search text</label><input class="form-control" name="search" value="$search" placeholder="Path, rule ID, message, IP or request ID"></div>
+<div class="col-md-6"><label class="form-label">Search text</label><input class="form-control" name="search" value="$search" autocomplete="off" placeholder="Path, rule ID, message, IP or request ID"></div>
 <div class="col-md-2"><label class="form-label">Since (Unix seconds)</label><input class="form-control" type="number" min="0" name="since" value="$since"></div>
 <div class="col-md-2"><label class="form-label">Max results</label><input class="form-control" type="number" min="1" max="1000" name="limit" value="$limit"></div>
 <div class="col-md-2 d-flex align-items-end"><button class="btn btn-primary w-100" type="submit" id="logSearchButton"><span id="logSearchSpinner" class="spinner-border spinner-border-sm me-2 d-none" role="status" aria-hidden="true" hidden></span><span id="logSearchButtonLabel">Search logs</span></button></div>

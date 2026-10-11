@@ -317,6 +317,29 @@
   const routeOptions = document.getElementById("logRouteOptions");
   const scopesField = form.querySelector('input[name="scopes_json"]');
   if (!hostButton || !routeButton || !hostOptions || !routeOptions || !scopesField) return;
+  // The submitted URL is authoritative after a search. In between searches,
+  // keep the filter selections for this browser tab without querying logs.
+  const storageKey = "liteedge:log-search-filters:v1";
+  const submittedSearch = typeof location !== "undefined" &&
+    new URLSearchParams(location.search).get("apply") === "1";
+  let storedFilters = null;
+  try { storedFilters = JSON.parse(sessionStorage.getItem(storageKey) || "null"); } catch (_) {}
+  const namedControls = Array.from(form.querySelectorAll('input[name]:not([type="hidden"]), select[name]'));
+  if (!submittedSearch && storedFilters && storedFilters.values && typeof storedFilters.values === "object") {
+    namedControls.forEach((control) => {
+      const value = storedFilters.values[control.name];
+      if (typeof value !== "string") return;
+      if (control.tagName === "SELECT" && !Array.from(control.options).some((option) => option.value === value)) return;
+      control.value = value;
+    });
+  }
+  const saveFilters = () => {
+    const values = {};
+    namedControls.forEach((control) => { values[control.name] = control.value; });
+    try {
+      sessionStorage.setItem(storageKey, JSON.stringify({ values, scopes: JSON.parse(scopesField.value || "[]") }));
+    } catch (_) { /* Filter retention is optional when browser storage is disabled. */ }
+  };
   const checked = (items) => items.filter((item) => item.checked);
   const shorten = (values, fallback) => values.length === 0 ? fallback :
     (values.length <= 2 ? values.join(", ") : `${values.length} selected`);
@@ -372,7 +395,8 @@
   // Preserve both host and route selections on navigation/reload/export.
   let savedScopes = [];
   try {
-    const parsed = JSON.parse(form.dataset.logInitialScopes || scopesField.value || "[]");
+    const parsed = !submittedSearch && storedFilters && Array.isArray(storedFilters.scopes) ?
+      storedFilters.scopes : JSON.parse(form.dataset.logInitialScopes || scopesField.value || "[]");
     if (Array.isArray(parsed)) savedScopes = parsed;
   } catch (_) { savedScopes = []; }
   hostChecks.forEach((item) => {
@@ -384,6 +408,11 @@
       scope.site === item.dataset.site && Array.isArray(scope.routes) && scope.routes.includes(item.value));
   });
   updatePickers();
+  // Changes to host/route checkboxes bubble after updatePickers has refreshed scopes_json.
+  form.addEventListener("input", saveFilters);
+  form.addEventListener("change", saveFilters);
+  form.addEventListener("submit", saveFilters);
+  saveFilters();
   const submitButton = document.getElementById("logSearchButton");
   const spinner = document.getElementById("logSearchSpinner");
   const buttonLabel = document.getElementById("logSearchButtonLabel");

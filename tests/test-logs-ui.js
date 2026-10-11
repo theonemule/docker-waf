@@ -29,7 +29,7 @@ function element(fields = {}) {
   };
   return obj;
 }
-function scenario(saved) {
+function scenario(saved, options = {}) {
   const host = element({value: "alpha.example", dataset: {site:"alpha.example"}});
   const alias = element({value: "www.alpha.example", dataset: {site:"alpha.example"}});
   const other = element({value: "beta.example", dataset: {site:"beta.example"}});
@@ -43,7 +43,7 @@ function scenario(saved) {
     route.closest = (selector) => selector === "[data-log-route-item]" ? wrapper : null;
     route.wrapper = wrapper;
   }
-  const type = element({name:"type",value:"all"});
+  const type = element({name:"type",tagName:"SELECT",options:[{value:"all"},{value:"http"},{value:"waf"}],value:"all"});
   const term = element({name:"search",value:""});
   const max = element({name:"limit",value:"100"});
   const timestamp = element({name:"since",value:"0"});
@@ -54,6 +54,7 @@ function scenario(saved) {
       if (sel === "[data-log-host]") return [host, alias, other];
       if (sel === "[data-log-route]") return routes;
       if (sel === 'input[name], select[name]') return inputs;
+      if (sel === 'input[name]:not([type="hidden"]), select[name]') return inputs;
       return [];
     },
     querySelector(sel) { return sel === 'input[name="scopes_json"]' ? scopes : null; }
@@ -66,6 +67,12 @@ function scenario(saved) {
   };
   let documentListeners = {};
   const context = {
+    location: {search:options.query || ""},
+    URLSearchParams,
+    sessionStorage: {
+      getItem(key) { return options.storage?.get(key) ?? null; },
+      setItem(key, value) { options.storage?.set(key, value); }
+    },
     document: {
       getElementById(name) { return names[name] || null; },
       addEventListener(name, fn) { documentListeners[name] = fn; }
@@ -117,4 +124,28 @@ t= scenario([{host:"alpha.example",site:"alpha.example",routes:["exact:/healthz"
 assert.equal(t.host.checked,true,"reloaded filter restores host");
 assert.equal(t.routes[1].checked,true,"reloaded filter restores route");
 assert.equal(t.names.logRouteButton.disabled,false);
+// Verify the form restores all settings after returning without a search URL.
+const storage = new Map();
+t = scenario([], {storage});
+assert.equal(t.term.value, "", "search field starts empty");
+t.term.value = "192.0.2.100";
+t.max.value = "250";
+t.type.value = "waf";
+t.alias.checked = true;
+t.alias.trigger("change");
+t.routes[1].checked = true;
+t.routes[1].trigger("change");
+t.form.trigger("change");
+t = scenario([], {storage});
+assert.equal(t.term.value, "192.0.2.100", "search term restored after navigating away");
+assert.equal(t.max.value, "250", "max results restored");
+assert.equal(t.type.value, "waf", "event type restored");
+assert.equal(t.alias.checked, true, "alias restored");
+assert.equal(t.routes[1].checked, true, "route restored");
+// Explicit GET query parameters win over previous tab settings.
+t = scenario([{host:"beta.example",site:"beta.example",routes:["prefix:/"]}], {storage,query:"?apply=1&type=http"});
+assert.equal(t.term.value, "", "old search must not override submitted search");
+assert.equal(t.other.checked, true, "URL scopes win over session state");
+assert.equal(t.alias.checked, false, "saved alias does not override URL scopes");
+assert.equal(t.type.value, "all", "stored type does not override server-provided form on submitted search");
 console.log("PASS Logs browser events: blank-filter prevention, loading state, BFCache restoration, host/route selection and persisted filters");
