@@ -1,3 +1,12 @@
+## October 11, 2026 — LiteEdge v3.1.2 complete release
+
+- Rebuild the entire v3.1.2 standalone Alpine/musl appliance, VM and bare-metal
+  offline installer ISOs, and Docker/OCI container from the latest `master`.
+- Include the Logs dropdown dismissal fix and all previously merged SPA, WAF,
+  observability, backup, routing, and security updates.
+- Publish tagged container and immutable SHA build, downloadable installation
+  assets and SHA-256 checksums through the verified release workflow.
+
 ## October 11, 2026 — Logs dropdown dismissal fix
 
 - Close the Logs host/alias and route multi-select menus when clicking outside.
