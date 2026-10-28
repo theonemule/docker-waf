@@ -45,7 +45,7 @@ umask 077
 password_hash="$(printf '%s\n' "$password" | openssl passwd -6 -stdin)" || exit 1
 unset password confirmation
 case "$password_hash" in
-    '\$6\$'*) ;;
+    '$6$'*) ;;
     *) echo 'Unable to generate a SHA-512-crypt password hash.' >&2; exit 1 ;;
 esac
 printf '%s:%s\n' "$admin_user" "$password_hash" > "$auth_file"
