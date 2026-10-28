@@ -6,6 +6,7 @@ VERSION="${LITEEDGE_VERSION:-latest}"
 START=1
 GENERATED_PASSWORD=""
 OFFLINE_DIR=""
+SELECTED_ADMIN_USER='admin'
 
 usage() {
   cat <<USAGE
@@ -52,6 +53,27 @@ esac
 RUNTIME_PACKAGES="python3 bash ca-certificates curl openssl tzdata fcgiwrap spawn-fcgi pcre2 libxml2 yajl lmdb libcurl libstdc++ libgcc zlib libmaxminddb coreutils diffutils patch lua5.3-libs jq socat logrotate libcap openrc"
 if [ -n "$OFFLINE_DIR" ]; then
   [ -d "$OFFLINE_DIR" ] || { echo "Offline directory missing: $OFFLINE_DIR" >&2; exit 1; }
+  # The ISO installer saved a SHA-512-crypt htpasswd entry in the live /etc.
+  # Never invent a different password when the user configured one at setup.
+  [ -s "$OFFLINE_DIR/.admin-setup" ] || {
+    echo 'Missing web administrator credentials from ISO installation.' >&2; exit 1;
+  }
+  [ "$(wc -l < "$OFFLINE_DIR/.admin-setup")" -eq 1 ] || {
+    echo 'Invalid web administrator credential file.' >&2; exit 1;
+  }
+  IFS=: read -r SELECTED_ADMIN_USER selected_admin_hash < "$OFFLINE_DIR/.admin-setup"
+  case "$SELECTED_ADMIN_USER" in
+    ''|[!a-zA-Z]*|*[!a-zA-Z0-9_.-]*)
+      echo 'Invalid web administrator username.' >&2; exit 1 ;;
+  esac
+  [ "${#SELECTED_ADMIN_USER}" -le 32 ] || {
+    echo 'Invalid web administrator username length.' >&2; exit 1;
+  }
+  case "$selected_admin_hash" in
+    '$6$'*) ;;
+    *) echo 'Invalid web administrator password hash.' >&2; exit 1 ;;
+  esac
+  unset selected_admin_hash
   for package in $RUNTIME_PACKAGES; do
     apk info -e "$package" >/dev/null 2>&1 || {
       echo "Required offline dependency is not installed: $package" >&2; exit 1;
@@ -119,6 +141,11 @@ install -d -o liteedge -g liteedge -m 0755 \
   /var/lib/liteedge/www
 
 chown -R liteedge:liteedge /var/lib/liteedge
+if [ -n "$OFFLINE_DIR" ]; then
+  # Seed authentication before the OpenRC service starts.
+  install -m 0600 -o liteedge -g liteedge \
+    "$OFFLINE_DIR/.admin-setup" /var/lib/liteedge/auth/.htpasswd
+fi
 
 # A file capability makes the dynamic loader enter secure mode, where
 # LD_LIBRARY_PATH is ignored. Expose the bundled libModSecurity SONAME through
@@ -131,11 +158,15 @@ setcap cap_net_bind_service=+ep /opt/liteedge/sbin/nginx
 install -m 0755 /opt/liteedge/share/openrc/liteedge /etc/init.d/liteedge
 
 if [ ! -f /etc/conf.d/liteedge ]; then
-  GENERATED_PASSWORD="$(openssl rand -hex 24)"
+  # Standalone Alpine installs retain their generated password behavior.
+  # ISO installs have already collected and hashed the chosen password.
+  if [ -z "$OFFLINE_DIR" ]; then
+    GENERATED_PASSWORD="$(openssl rand -hex 24)"
+  fi
   cat > /etc/conf.d/liteedge <<CONF
 export DATA_DIR=/var/lib/liteedge
 export LITEEDGE_RUN_DIR=/var/lib/liteedge/run
-export ADMIN_USER=admin
+export ADMIN_USER=$SELECTED_ADMIN_USER
 export ADMIN_PASSWORD='$GENERATED_PASSWORD'
 export ACME_EMAIL=''
 export LITEEDGE_HTTP_PORT=80
@@ -166,6 +197,9 @@ echo "Installed LiteEdge $VERSION for linux-musl-$ARCH."
 echo "State: /var/lib/liteedge"
 echo "Configuration: /etc/conf.d/liteedge"
 if [ -n "$GENERATED_PASSWORD" ]; then
-  echo "Admin user: admin"
+  echo "Admin user: $SELECTED_ADMIN_USER"
   echo "Admin password: $GENERATED_PASSWORD"
+else
+  echo "Admin user: $SELECTED_ADMIN_USER"
+  echo 'Admin password: chosen during ISO installation (not saved in plaintext).'
 fi

@@ -40,9 +40,12 @@ printf 'APKREPOSOPTS=%s\nDISKOPTS="-m sys %s"\n' "$repository" "$disk" > "$answe
 export MIRRORS='offline-install-only'
 echo 'Starting Alpine setup. Set the root password and select network options.'
 echo 'No Internet connection is required. Select local installation if asked.'
+# Save only the salted web-admin password hash in the live /etc tree.
+# Alpine setup-disk copies this tree to the installed system at disk setup.
+sh /etc/liteedge-offline/iso-admin-setup.sh /etc/liteedge-offline/.admin-setup
 setup-alpine -f "$answers"
 echo
 echo 'Alpine installed. The next boot will install LiteEdge automatically'
 echo 'from the payload included in the disk image.'
 echo 'Disconnect the installation ISO and reboot the VM.'
-echo 'After first boot, read /root/liteedge-install.txt for the admin credentials.'
+echo 'After first boot, log into LiteEdge with the web admin username/password you set here.'

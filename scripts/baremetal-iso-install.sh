@@ -65,7 +65,10 @@ trap 'rm -f "$answer_file"' EXIT HUP INT TERM
 printf 'APKREPOSOPTS=%s\nDISKOPTS="-m sys %s"\n' "$repository" "$disk" > "$answer_file"
 export MIRRORS=offline-install-only
 echo 'Installing offline Alpine Linux. Do not remove the installation media.'
+# Collect the web-admin credentials before Alpine transfers /etc to disk.
+# Only the password hash is persisted, never the plaintext password.
+sh /etc/liteedge-offline/iso-admin-setup.sh /etc/liteedge-offline/.admin-setup
 setup-alpine -f "$answer_file"
 echo 'Disk setup finished. Remove the USB/DVD and reboot.'
 echo 'On first boot LiteEdge installs itself from the bundled offline payload.'
-echo 'Its new administrator credentials will be saved in /root/liteedge-install.txt.'
+echo 'Use the LiteEdge web admin username/password you chose during this installation.'

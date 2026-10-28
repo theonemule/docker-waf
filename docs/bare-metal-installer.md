@@ -51,13 +51,18 @@ as `/dev/sda`, `/dev/nvme0n1`, or `/dev/vda`. It rejects partitions,
 mounted target disks, and the detected live installer device. It requires
 an explicit `ERASE` confirmation before starting Alpine's `setup-alpine`.
 **The selected target disk will be entirely erased.** The installer asks
-for the root password and basic host/network setup. Its APK repository is
+for a **LiteEdge web-admin username and password**, including hidden password
+entry and confirmation, then separately for the Linux root password and basic
+host/network setup. Its APK repository is
 forced to the ISO, without internet downloads.
 
 When installation completes, remove the USB drive and reboot. On the first
 boot, the included OpenRC local service installs LiteEdge from the offline
-payload, creates new administrator credentials on the target machine, and
-writes them to `/root/liteedge-install.txt` (readable only by root).
+payload and applies the web administrator credentials chosen during ISO setup.
+Only the salted SHA-512-crypt hash is transferred to the installed system;
+the plaintext password is not logged or saved in `/root/liteedge-install.txt`.
+The default web administrator username is `admin`, and the web login is separate
+from the Linux root account.
 
 LiteEdge's API/UI listen on the configured management HTTPS port; the
 complete WAF runtime is installed as an OpenRC service. Review the generated

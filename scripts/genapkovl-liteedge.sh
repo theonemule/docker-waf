@@ -76,6 +76,7 @@ FIRMWARE
 esac
 cp "$tarball" "$checksum" "$tmp/etc/liteedge-offline/"
 cp "$root/scripts/install-alpine.sh" "$tmp/etc/liteedge-offline/install-alpine.sh"
+cp "$root/scripts/iso-admin-setup.sh" "$tmp/etc/liteedge-offline/iso-admin-setup.sh"
 if [ "${LITEEDGE_ISO_VARIANT:-vm}" = baremetal ]; then
     cp "$root/scripts/baremetal-iso-install.sh" "$tmp/etc/liteedge-offline/baremetal-iso-install.sh"
 else

@@ -21,7 +21,7 @@ docker run --rm \
   -e ALPINE_VERSION="$ALPINE_VERSION" \
   -v "$ROOT:/src" \
   -w /src \
-  "public.ecr.aws/docker/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}" \
+  "${ALPINE_BUILD_IMAGE:-docker.io/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}}" \
   /bin/sh /src/scripts/build-vm-iso-inner.sh
 ( cd "$ROOT/dist"; sha256sum -c "liteedge-${ISO_VARIANT}-installer-${VERSION}-x86_64.iso.sha256" )
 ls -lh "$ROOT/dist/liteedge-${ISO_VARIANT}-installer-${VERSION}-x86_64.iso"*

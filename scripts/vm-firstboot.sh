@@ -11,14 +11,19 @@ marker=/var/lib/liteedge/.vm-iso-installed
 source_dir=/etc/liteedge-offline
 [ -r "$source_dir/liteedge-linux-musl-x86_64.tar.gz" ] || {
     echo 'LiteEdge first-boot archive missing.' >&2; exit 1; }
-# Passwords are created on the VM, never on the ISO or CI.
+[ -s "$source_dir/.admin-setup" ] || {
+    echo 'LiteEdge web administrator credentials were not transferred from the installer.' >&2
+    exit 1
+}
+# The ISO installer provided a salted password hash; do not generate a new password.
 umask 077
 log=/root/liteedge-install.txt
 if sh "$source_dir/install-alpine.sh" --offline-dir "$source_dir" > "$log" 2>&1; then
     mkdir -p /var/lib/liteedge
     touch "$marker"
     chmod 600 "$marker" "$log"
-    echo 'LiteEdge installed. Admin credentials: /root/liteedge-install.txt'
+    rm -f "$source_dir/.admin-setup"
+    echo 'LiteEdge installed. Use the web admin credentials chosen during ISO installation.'
 else
     echo 'LiteEdge first-boot installation failed. Review /root/liteedge-install.txt' >&2
     exit 1
