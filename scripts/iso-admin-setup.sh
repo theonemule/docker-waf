@@ -16,7 +16,7 @@ exec 3<>/dev/tty || { echo 'An interactive console is required.' >&2; exit 1; }
 printf '\nLiteEdge web administration account\n' >&3
 printf 'Admin username [admin]: ' >&3
 IFS= read -r admin_user <&3 || exit 1
-[ -n "$admin_user" ] || admin_user=admin
+[ -n "$admin_user" ] || admin_user='admin'
 case "$admin_user" in
     [!a-zA-Z]*|*[!a-zA-Z0-9_.-]*)
         echo 'Username must start with a letter and contain only letters, digits, _, . or -.' >&2
@@ -37,10 +37,10 @@ stty "$tty_mode" <&3
 trap - EXIT HUP INT TERM
 
 [ "$password" = "$confirmation" ] || { echo 'Passwords do not match.' >&2; exit 1; }
-[ "${#password}" -ge 10 ] && [ "${#password}" -le 128 ] || {
+if [ "${#password}" -lt 10 ] || [ "${#password}" -gt 128 ]; then
     echo 'Password must contain 10-128 characters.' >&2
     exit 1
-}
+fi
 umask 077
 password_hash="$(printf '%s\n' "$password" | openssl passwd -6 -stdin)" || exit 1
 unset password confirmation
