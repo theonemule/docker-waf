@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for file in scripts/install-alpine.sh scripts/build-vm-iso-inner.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
+for file in scripts/install-alpine.sh scripts/iso-admin-setup.sh scripts/build-vm-iso-inner.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
   sh -n "$ROOT/$file"
 done
 bash -n "$ROOT/scripts/build-vm-iso.sh"
@@ -31,6 +31,18 @@ grep -Fq 'linux-lts' "$ROOT/scripts/genapkovl-liteedge.sh"
 grep -Fq 'LITEEDGE_ISO_VARIANT=baremetal' "$ROOT/scripts/build-baremetal-iso.sh"
 grep -Fq 'apk --no-network' "$ROOT/scripts/build-vm-iso-inner.sh"
 grep -Fq 'setup-alpine -f' "$ROOT/scripts/baremetal-iso-install.sh"
+# Both ISO flavors must request web credentials before Alpine copies /etc to disk.
+grep -Fq 'iso-admin-setup.sh /etc/liteedge-offline/.admin-setup' "$ROOT/scripts/vm-iso-install.sh"
+grep -Fq 'iso-admin-setup.sh /etc/liteedge-offline/.admin-setup' "$ROOT/scripts/baremetal-iso-install.sh"
+grep -Fq 'scripts/iso-admin-setup.sh' "$ROOT/scripts/genapkovl-liteedge.sh"
+grep -Fq 'stty -echo' "$ROOT/scripts/iso-admin-setup.sh"
+grep -Fq 'openssl passwd -6 -stdin' "$ROOT/scripts/iso-admin-setup.sh"
+grep -Fq 'install -m 0600 -o liteedge -g liteedge' "$ROOT/scripts/install-alpine.sh"
+grep -Fq 'Missing web administrator credentials from ISO installation.' "$ROOT/scripts/install-alpine.sh"
+grep -Fq 'rm -f "$source_dir/.admin-setup"' "$ROOT/scripts/vm-firstboot.sh"
+# A root password is different from a web administrator password.
+grep -Fq 'export ADMIN_USER=$SELECTED_ADMIN_USER' "$ROOT/scripts/install-alpine.sh"
+
 grep -Fq 'Type ERASE' "$ROOT/scripts/baremetal-iso-install.sh"
 grep -Fq 'mounted partitions' "$ROOT/scripts/baremetal-iso-install.sh"
 grep -Fq 'offline Alpine' "$ROOT/scripts/baremetal-iso-install.sh"
