@@ -555,18 +555,21 @@ or UEFI VM. UEFI Secure Boot is **not** supported by the unsigned GRUB loader.
    installer live environment).
 2. Run `sh /etc/liteedge-offline/vm-iso-install.sh`. Select the target
    **virtual disk**, explicitly confirm erasure, and complete Alpine's normal
-   prompts to set the *OS root password* and network/SSH configuration.
+   prompts to set the *LiteEdge web admin username and password* (hidden entry,
+   with confirmation), then the separate *OS root password* and network/SSH configuration.
    The installer configures the on-ISO APK repository and runs
    `setup-alpine` in system-installation mode. It does **not** download
    packages, look up GitHub releases, or need a working internet connection.
 3. Once Alpine reports disk installation complete, **eject the ISO** and
    reboot. The included one-time OpenRC `local.d` service extracts and
-   installs LiteEdge from the offline bundle on first boot. It generates a
-   random administrator password **inside the VM**.
-4. Log into the VM console as root and inspect
-   `cat /root/liteedge-install.txt` (root-readable only) for the LiteEdge
-   credentials. Open `https://VM_IP:8443/` to administer LiteEdge. Routes
-   listen on 80/443. The state is persisted under `/var/lib/liteedge`.
+   installs LiteEdge from the offline bundle on first boot. It uses the
+   administrator password configured interactively during ISO installation;
+   it does **not** generate a second password.
+4. Open `https://VM_IP:8443/` and sign in with the LiteEdge web admin username
+   and password you chose during setup (default username: `admin`). The root
+   account password is **only** for the Linux console/SSH. Routes listen on
+   80/443. The state is persisted under `/var/lib/liteedge`. No plaintext
+   web-admin password is written to installation logs.
    To change the password later, use **Server Settings**.
 
 The installer preserves no baked-in user password, SSH host keys, API tokens,
