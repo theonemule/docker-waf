@@ -276,7 +276,16 @@ jobs:
           test -s "dist/liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
           test -s "dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
           if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            # A prior failed release attempt may have uploaded incorrectly
+            # versioned ISO assets. Remove only that obsolete 3.1.2 pair.
+            for name in "liteedge-vm-installer-3.1.2-x86_64.iso" \
+                        "liteedge-vm-installer-3.1.2-x86_64.iso.sha256" \
+                        "liteedge-baremetal-installer-3.1.2-x86_64.iso" \
+                        "liteedge-baremetal-installer-3.1.2-x86_64.iso.sha256"; do
+              gh release delete-asset "$tag" "$name" --yes --repo "${GITHUB_REPOSITORY}" 2>/dev/null || true
+            done
             gh release upload "$tag" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
+            gh release edit "$tag" --target "$GITHUB_SHA" --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "$tag" dist/* \
               --repo "${GITHUB_REPOSITORY}" \
