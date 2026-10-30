@@ -1446,14 +1446,14 @@ handle_post() {
     /admin/route/add)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}"
       redirect "/admin/site?host=$host"
       ;;
 
     /admin/route/save)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}"
       redirect "/admin/site?host=$host"
       ;;
 

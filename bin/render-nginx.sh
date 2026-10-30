@@ -135,7 +135,7 @@ route_value() {
 emit_route_values() {
   local host="$1" match="$2" path="$3" target="$4" websocket="$5"
   local timeout="$6" waf="$7" force_https="$8" waf_pl="$9" waf_plugins="${10}" waf_disabled="${11}" scheme="${12}" cert_exists="${13}"
-  local location id
+  local location id methods rewrite_enabled rewrite_pattern rewrite_replacement header_blob header_line header_name header_value header_text
 
   case "$match" in
     exact) location="location = $path" ;;
@@ -153,13 +153,43 @@ emit_route_values() {
     return 0
   fi
 
+  printf '        set $liteedge_route_%s "%s";\n' "$id" "$target"
+
+  methods="${ROUTE_METHODS:-ALL}"
+  validate_route_methods "$methods"
+  if [[ "$methods" != ALL ]]; then
+    printf '        if ($request_method !~ ^(%s)$) {\n' "${methods//,/|}"
+    echo '            return 405;'
+    echo '        }'
+  fi
+  rewrite_enabled="${ROUTE_REWRITE_ENABLED:-0}"
+  rewrite_pattern="${ROUTE_REWRITE_PATTERN:-}"
+  rewrite_replacement="${ROUTE_REWRITE_REPLACEMENT:-}"
+  validate_route_rewrite "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
+  if [[ "$rewrite_enabled" == 1 ]]; then
+    printf '        rewrite %s %s break;\n' "$rewrite_pattern" "$rewrite_replacement"
+  fi
   if [[ "$waf" == 1 ]]; then
     emit_location_waf "$host" "$id" "$waf_pl" "$waf_plugins" "$waf_disabled"
   fi
 
-  printf '        set $liteedge_route_%s "%s";\n' "$id" "$target"
-  printf '        proxy_pass $liteedge_route_%s;\n' "$id"
+  if [[ "$rewrite_enabled" == 1 || "$methods" != ALL ]]; then
+    # A literal upstream survives conditional method checks and rewrite-phase exits.
+    printf '        proxy_pass %s;\n' "$target"
+  else
+    printf '        proxy_pass $liteedge_route_%s;\n' "$id"
+  fi
   emit_proxy_headers
+  header_blob="${ROUTE_X_HEADERS_B64:-}"
+  if [[ -n "$header_blob" ]]; then
+    header_text="$(printf '%s' "$header_blob" | base64 -d 2>/dev/null)" || die 'Invalid headers encoding.'
+    validate_route_headers "$header_text"
+    while IFS= read -r header_line || [[ -n "$header_line" ]]; do
+      [[ -n "$header_line" ]] || continue
+      header_name="${header_line%%:*}"; header_value="${header_line#*:}"; header_value="${header_value# }"
+      printf '        proxy_set_header %s "%s";\n' "$header_name" "$header_value"
+    done <<< "$header_text"
+  fi
   printf '        proxy_connect_timeout %ss;\n' "$timeout"
   printf '        proxy_send_timeout %ss;\n' "$timeout"
   printf '        proxy_read_timeout %ss;\n' "$timeout"
@@ -189,10 +219,16 @@ emit_route() {
   fi
 
   target="$(pool_effective_target "$host" "$route")"
+  ROUTE_METHODS="$(route_value "$route" METHODS ALL)"
+  ROUTE_REWRITE_ENABLED="$(route_value "$route" REWRITE_ENABLED 0)"
+  ROUTE_REWRITE_PATTERN="$(route_value "$route" REWRITE_PATTERN "")"
+  ROUTE_REWRITE_REPLACEMENT="$(route_value "$route" REWRITE_REPLACEMENT "")"
+  ROUTE_X_HEADERS_B64="$(route_value "$route" X_HEADERS_B64 "")"
   POOL_COOKIE_AFFINITY=0
   [[ -n "$(kv_get "$route" BACKENDS)" && "$(kv_get "$route" LB_MODE)" == cookie ]] && POOL_COOKIE_AFFINITY=1
   emit_route_values "$host" "$match" "$path" "$target" "$websocket" "$timeout" "$waf" "$force_https" "$waf_pl" "$waf_plugins" "$waf_disabled" "$scheme" "$cert_exists"
   POOL_COOKIE_AFFINITY=0
+  unset ROUTE_METHODS ROUTE_REWRITE_ENABLED ROUTE_REWRITE_PATTERN ROUTE_REWRITE_REPLACEMENT ROUTE_X_HEADERS_B64
 }
 
 has_root_route() {
@@ -226,6 +262,7 @@ emit_legacy_default() {
     waf_plugins=wordpress-rule-exclusions
   fi
 
+  unset ROUTE_METHODS ROUTE_REWRITE_ENABLED ROUTE_REWRITE_PATTERN ROUTE_REWRITE_REPLACEMENT ROUTE_X_HEADERS_B64
   emit_route_values "$host" prefix / "$upstream" "$websocket" "$timeout" "$waf" "$force_https" "$waf_pl" "$waf_plugins" "" "$scheme" "$cert_exists"
 }
 

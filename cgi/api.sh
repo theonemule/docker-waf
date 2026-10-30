@@ -22,11 +22,14 @@ api_json_file() {
 }
 api_route_json() {
   local file="$1" key value out='{}'
-  for key in ID MATCH PATH TARGET BACKENDS ACTION WEBSOCKET TIMEOUT WAF FORCE_HTTPS WAF_PL WAF_PLUGINS WAF_DISABLED LB_MODE MAX_FAILS FAIL_TIMEOUT HEALTH_ENABLED HEALTH_PATH HEALTH_EXPECT HEALTH_INTERVAL HEALTH_TIMEOUT HEALTH_FALL HEALTH_RISE HEALTH_COOLDOWN; do
+  for key in ID MATCH PATH TARGET BACKENDS ACTION WEBSOCKET TIMEOUT WAF FORCE_HTTPS WAF_PL WAF_PLUGINS WAF_DISABLED LB_MODE MAX_FAILS FAIL_TIMEOUT HEALTH_ENABLED HEALTH_PATH HEALTH_EXPECT HEALTH_INTERVAL HEALTH_TIMEOUT HEALTH_FALL HEALTH_RISE HEALTH_COOLDOWN METHODS REWRITE_ENABLED REWRITE_PATTERN REWRITE_REPLACEMENT; do
     value="$(kv_get "$file" "$key")"
     out="$(jq -cn --argjson obj "$out" --arg key "${key,,}" --arg value "$value" '$obj + {($key):$value}')"
   done
-  printf '%s\n' "$out"
+  local headers
+  headers="$(kv_get "$file" X_HEADERS_B64)"
+  [[ -z "$headers" ]] || headers="$(printf '%s' "$headers" | base64 -d 2>/dev/null || true)"
+  jq -cn --argjson obj "$out" --arg headers "$headers" '$obj + {x_headers:$headers}'
 }
 api_site_json() {
   local file="$1" host aliases enabled mode

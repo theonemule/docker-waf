@@ -228,6 +228,11 @@ case "$cmd" in
     backends="${12:-}"; lb_mode="${13:-round_robin}"; max_fails="${14:-3}"; fail_timeout="${15:-30}"
     health_enabled="$(bool_value "${16:-0}")"; health_path="${17:-/health}"; health_expect="${18:-200}"
     health_interval="${19:-30}"; health_timeout="${20:-5}"; health_fall="${21:-3}"; health_rise="${22:-2}"; health_cooldown="${23:-300}"
+    methods="${24:-ALL}"; rewrite_enabled="$(bool_value "${25:-0}")"
+    rewrite_pattern="${26:-}"; rewrite_replacement="${27:-}"; x_headers="${28:-}"
+    validate_route_methods "$methods"
+    validate_route_rewrite "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
+    validate_route_headers "$x_headers"
     validate_route_path "$health_path"
     [[ "$health_expect" =~ ^[1-5]xx$ || "$health_expect" =~ ^[1-5][0-9]{2}$ ]] || die 'Probe expected status must be 2xx, 3xx, etc or an exact HTTP status.'
     for health_numeric in health_interval health_timeout health_fall health_rise health_cooldown; do
@@ -293,6 +298,8 @@ source /opt/liteedge/bin/poolctl.sh
       printf 'WAF_PL=%s\n' "$waf_pl"
       printf 'WAF_PLUGINS=%s\n' "$waf_plugins"
       printf 'WAF_DISABLED=%s\n' "$waf_disabled"
+      printf 'METHODS=%s\nREWRITE_ENABLED=%s\nREWRITE_PATTERN=%s\nREWRITE_REPLACEMENT=%s\n' "$methods" "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
+      printf 'X_HEADERS_B64=%s\n' "$(printf '%s' "$x_headers" | base64 | tr -d '\n')"
       printf 'BACKENDS=%s\nLB_MODE=%s\nMAX_FAILS=%s\nFAIL_TIMEOUT=%s\n' "$backends" "$lb_mode" "$max_fails" "$fail_timeout"
       printf 'HEALTH_ENABLED=%s\nHEALTH_PATH=%s\nHEALTH_EXPECT=%s\nHEALTH_INTERVAL=%s\nHEALTH_TIMEOUT=%s\nHEALTH_FALL=%s\nHEALTH_RISE=%s\nHEALTH_COOLDOWN=%s\n' "$health_enabled" "$health_path" "$health_expect" "$health_interval" "$health_timeout" "$health_fall" "$health_rise" "$health_cooldown"
       if [[ -n "$import_key" ]]; then

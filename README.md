@@ -125,6 +125,26 @@ or multi-line URL text box. Choose a load-balancing method, passive failure
 threshold and timeout. Pools support up to 16 endpoints with matching base
 paths, and single-backend routes keep their existing behavior.
 
+### Per-route methods and backend request transformations
+
+The route editor includes an **Allowed HTTP methods** selector. All methods are
+allowed by default for backward compatibility; use **Select All** to reset the
+checkboxes, or choose only the verbs the endpoint needs. Other methods receive
+HTTP `405` before the request reaches the backend.
+
+Enable **URL rewrite** under **Backend request transformation** to transform the
+path sent to the backend. Enter an anchored NGINX-compatible regular expression
+and a replacement path. For example, `^/legacy/(.*)$` with `/v2/$1` sends
+`/legacy/users?id=1` upstream as `/v2/users?id=1`. Disable the switch to leave
+the original path unchanged. Captured groups use `$1` through `$9`; the usual
+query-string preservation rules apply. Changes are validated with `nginx -t` and
+rolled back if the generated configuration fails validation.
+
+Use the **Additional backend X-headers** text area for static values, one per
+line, such as `X-App-Route: api-v2`. The custom header list is optional. For
+security, LiteEdge does not allow replacing its forwarding identity headers
+or injecting raw NGINX expressions into header values.
+
 The same dialog offers an optional active HTTP health probe. Its defaults are
 a `/health` path, expected HTTP `200`, 30-second interval, 5-second
 request timeout, three consecutive failures to declare down, two successes

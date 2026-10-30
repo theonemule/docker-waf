@@ -206,6 +206,7 @@ jobs:
           set -euo pipefail
           bash tests/test-http-api-regression.sh "${IMAGE_NAME}:ci"
           bash tests/test-spa-api.sh "${IMAGE_NAME}:ci"
+          bash tests/test-route-enhancements.sh "${IMAGE_NAME}:ci"
           bash tests/test-full-backup.sh "${IMAGE_NAME}:ci"
 
       - name: Log in to GitHub Container Registry

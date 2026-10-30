@@ -170,7 +170,8 @@
     websocket:"1",force_https:"1",waf:"1",waf_pl:"1",waf_plugins:"",waf_disabled:"",
     lb_mode:"round_robin",max_fails:"3",fail_timeout:"30",
     health_enabled:"0",health_path:"/health",health_expect:"200",health_interval:"30",
-    health_timeout:"5",health_fall:"3",health_rise:"2",health_cooldown:"300"};
+    health_timeout:"5",health_fall:"3",health_rise:"2",health_cooldown:"300",
+    methods:"ALL",rewrite_enabled:"0",rewrite_pattern:"",rewrite_replacement:"",x_headers:""};
   async function editRoute(route) {
     const r={...defaultRoute,...route};
     if(!cache.plugins.length){
@@ -211,6 +212,22 @@
         +check("HTTP to HTTPS redirect","force_https",r.force_https)
         +field("Excluded WAF rule IDs","waf_disabled",r.waf_disabled)
         +(plugins?'<div class="mt-2"><strong>Application and CRS plugins</strong>'+plugins+'</div>':"")
+        +'</fieldset>'
+        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Allowed HTTP methods</legend>'
+        +'<div class="d-flex align-items-center gap-2 mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" data-operation="methods-all">Select All</button><span class="form-text">Unselected methods return HTTP 405.</span></div>'
+        +'<div class="d-flex flex-wrap gap-3" data-route-methods>'
+        +["GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS","TRACE","CONNECT"].map(method=>
+          '<label class="spa-check"><input class="form-check-input" type="checkbox" data-route-method value="'+method+'" '
+          +((r.methods||"ALL")==="ALL"||String(r.methods).split(",").includes(method)?"checked":"")+'> '+method+'</label>').join("")
+        +'</div></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Backend request transformation</legend>'
+        +check("Enable URL rewrite","rewrite_enabled",r.rewrite_enabled)
+        +'<p class="form-text">NGINX regex must begin ^/. Destination must begin /. Captures use $1, $2 etc. Existing query parameters are preserved unless overridden.</p>'
+        +'<div class="spa-form-grid">'
+        +field("Rewrite regex","rewrite_pattern",r.rewrite_pattern,"text",'placeholder="^/api/v1/(.*)$"')
+        +field("Backend replacement path","rewrite_replacement",r.rewrite_replacement,"text",'placeholder="/v2/$1"')+'</div>'
+        +textarea("Additional backend X-headers (one X-Name: value per line)","x_headers",r.x_headers,3)
+        +'<p class="form-text">Static values only. LiteEdge protects client and forwarding identity headers.</p>'
         +'</fieldset>',route?.id?"Save route":"Add route"));
   }
   function poolRow(url="") {
@@ -520,6 +537,11 @@
 
   function formValues(form) {
     const values=Object.fromEntries(new FormData(form).entries());
+    if(form.querySelector("[data-route-methods]")){
+      const chosen=[...form.querySelectorAll("[data-route-method]:checked")].map(x=>x.value);
+      if(!chosen.length)throw new Error("Select at least one HTTP method.");
+      values.methods=chosen.length===9?"ALL":chosen.join(",");
+    }
     if(form.querySelector("[data-pool]")){
       const urls=[...form.querySelectorAll("[data-pool-url]")].map(x=>x.value.trim());
       if(!urls.length||urls.some(url=>!url))throw new Error("A route needs at least one valid backend URL.");
@@ -589,6 +611,9 @@
       case "delete-route":
         if(!confirm("Delete this route?"))return;
         await act("route/delete",{host,id});toast("Route deleted.");await refresh();break;
+      case "methods-all":
+        el.closest("form").querySelectorAll("[data-route-method]").forEach(input=>{input.checked=true;});
+        break;
       case "pool-add": {
         const pool=el.closest("form").querySelector("[data-pool]");
         if(pool.children.length>=16){toast("Maximum 16 backends.","danger");return;}

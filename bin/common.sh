@@ -237,3 +237,41 @@ installed_plugin_rows() {
 reload_nginx() {
   "$NGINX_BIN" -s reload -c "$NGINX_CONF"
 }
+
+# Route feature validation. Never interpolate unchecked values into NGINX directives.
+validate_route_methods() {
+  local methods="$1" item
+  [[ "$methods" == ALL ]] && return 0
+  [[ "$methods" =~ ^(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|TRACE|CONNECT)(,(GET|HEAD|POST|PUT|PATCH|DELETE|OPTIONS|TRACE|CONNECT))*$ ]] || die 'Invalid HTTP method selection.'
+  local -A seen=()
+  local -a items=()
+  IFS=',' read -r -a items <<< "$methods"
+  for item in "${items[@]}"; do
+    [[ ! -v seen[$item] ]] || die 'Duplicate HTTP method.'
+    seen[$item]=1
+  done
+}
+validate_route_rewrite() {
+  local enabled="$1" pattern="$2" replacement="$3"
+  [[ "$enabled" == 0 || "$enabled" == 1 ]] || die 'Invalid rewrite toggle.'
+  [[ "$enabled" == 1 ]] || return 0
+  [[ "${#pattern}" -le 256 && "$pattern" == '^/'* ]] || die 'Rewrite regex must start with ^/ and be <=256 characters.'
+  [[ "${#replacement}" -le 512 && "$replacement" == /* ]] || die 'Rewrite destination must begin with / and be <=512 characters.'
+  # NGINX validates regex syntax on config test; this denies directive delimiters.
+  if printf %s "$pattern" | LC_ALL=C grep -Eq '[[:space:];#{}]'; then die 'Unsafe rewrite regex.'; fi
+  case "$pattern" in *\"*|*\'*|*\`*) die "Unsafe rewrite regex quoting.";; esac
+  printf '%s' "$replacement" | LC_ALL=C grep -Eq '^/[a-zA-Z0-9_./$?&=%+-]+$' || die 'Unsafe rewrite replacement.'
+}
+validate_route_headers() {
+  local value="$1" line key val count=0
+  [[ "${#value}" -le 4096 ]] || die 'Headers too long.'
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -n "$line" ]] || continue
+    ((count+=1)); ((count<=20)) || die 'Maximum 20 headers.'
+    [[ "$line" == *:* ]] || die 'Headers must be X-Name: value.'
+    key="${line%%:*}"; val="${line#*:}"; val="${val# }"
+    [[ "$key" =~ ^X-[a-zA-Z0-9-]+$ && -n "$val" && "${#val}" -le 256 ]] || die 'Invalid X-header name/value.'
+    case "${key,,}" in x-real-ip|x-forwarded-for|x-forwarded-proto|x-forwarded-host|x-liteedge-*) die 'Cannot override protected forwarding headers.';; esac
+    printf '%s' "$val" | LC_ALL=C grep -Eq '^[a-zA-Z0-9_.,:/@+=% -]+$' || die 'Unsafe request header value.'
+  done <<< "$value"
+}
