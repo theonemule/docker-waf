@@ -1,3 +1,15 @@
+## October 30, 2026 — LiteEdge v3.1.4 full release
+
+- Release the per-route HTTP method allowlist with a Select All action;
+  reject disallowed verbs with HTTP 405.
+- Add optional per-route regular-expression URL path rewrites and static
+  custom X-headers forwarded to upstream applications.
+- Validate route configuration and protect forwarding identity headers
+  against overrides. Preserve compatibility for existing routes.
+- Include end-to-end proxy and management API regression tests in CI.
+- Rebuild and publish the Alpine/musl appliance, runtime Docker image,
+  offline VM installer ISO and bare-metal ISO as the v3.1.4 release.
+
 ## October 11, 2026 — LiteEdge v3.1.2 complete release
 
 - Rebuild the entire v3.1.2 standalone Alpine/musl appliance, VM and bare-metal
