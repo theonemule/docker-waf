@@ -251,6 +251,23 @@
     }
   }
 
+  function updateLegacyExport(form) {
+    const mode=form.querySelector('select[name="mode"]')?.value || "off";
+    for (const group of form.querySelectorAll("[data-export-mode]")) {
+      const active=group.dataset.exportMode===mode;
+      group.hidden=!active;
+      group.style.display=active?"":"none";
+      for (const control of group.querySelectorAll("input,select,textarea")) control.disabled=!active;
+    }
+  }
+  const legacyExport=document.querySelector?.("[data-export-form]");
+  if (legacyExport) {
+    updateLegacyExport(legacyExport);
+    legacyExport.addEventListener("change", (event)=>{
+      if (event.target.name==="mode") updateLegacyExport(legacyExport);
+    });
+  }
+
   const ruleSearch = document.getElementById("crsRuleSearch");
   if (ruleSearch) {
     ruleSearch.addEventListener("input", () => {

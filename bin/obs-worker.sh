@@ -86,6 +86,53 @@ send_http() {
   printf '%s' "$payload" | curl "${curl_args[@]}" "$url" >/dev/null
 }
 
+# Export log events using OTLP/HTTP protobuf-JSON. This worker is already
+# record-oriented, so each request contains one ExportLogsServiceRequest.
+send_otlp() {
+  local url="$1" event="$2" token="${3:-}" service_name="${4:-liteedge}" payload
+  [[ "$url" =~ ^https?://[A-Za-z0-9._-]+(:[0-9]{1,5})?/v1/logs$ ]] || return 1
+  [[ "$url" != http://* || -z "$token" ]] || return 1
+  payload="$(jq -cn --argjson event "$event" --arg service "$service_name" --arg instance "$(hostname)" '
+    def otlp_value:
+      if type == "boolean" then {boolValue:.}
+      elif type == "number" then
+        if . == floor then {intValue:tostring} else {doubleValue:.} end
+      elif type == "array" or type == "object" then {stringValue:tojson}
+      else {stringValue:tostring} end;
+    $event as $e
+    | ((($e.epoch // now) | tostring | split("."))) as $parts
+    | ($parts[0] + ((($parts[1] // "") + "000000000")[0:9])) as $timestamp
+    | (if ($e.type // "") == "waf" and ($e.action // "") == "blocked" then 13
+       elif (($e.status // 0) | tonumber) >= 500 then 17
+       elif (($e.status // 0) | tonumber) >= 400 then 13
+       else 9 end) as $severity
+    | {resourceLogs:[{
+        resource:{attributes:[
+          {key:"service.name",value:{stringValue:$service}},
+          {key:"service.instance.id",value:{stringValue:$instance}}
+        ]},
+        scopeLogs:[{scope:{name:"liteedge.observability"},
+          logRecords:[{
+            timeUnixNano:$timestamp,
+            observedTimeUnixNano:((now|floor|tostring)+"000000000"),
+            severityNumber:$severity,
+            severityText:(if $severity==17 then "ERROR" elif $severity==13 then "WARN" else "INFO" end),
+            body:{stringValue:((($e.message // "") | tostring) | if . != "" then . else ($e.type // "liteedge.event") end)},
+            attributes:($e | to_entries | map(select(.value != null) |
+              {key:("liteedge." + .key),value:(.value | otlp_value)}))
+          }]
+        }]
+      }]}' )" || return 1
+  local -a curl_args=(--fail --silent --show-error --connect-timeout 3 --max-time 12
+    --proto '=http,https' --max-redirs 0 -X POST -H 'Content-Type: application/json' --data-binary @-)
+  [[ -z "$token" ]] || curl_args+=(-H "Authorization: Bearer $token")
+  local response
+  response="$(printf '%s' "$payload" | curl "${curl_args[@]}" "$url")" || return 1
+  # OTLP receivers can return HTTP 200 with rejected log records. Treat that
+  # response as a delivery failure so the persistent cursor can retry.
+  [[ -z "$response" ]] || jq -e '(.partialSuccess.rejectedLogRecords // "0" | tonumber)==0' <<< "$response" >/dev/null
+}
+
 forward_event() {
   local event="$1" config="$OBS_DIR/collector.json" mode host port protocol provider url token
   [[ -f "$config" ]] || return 0
@@ -106,6 +153,9 @@ forward_event() {
       provider="$(jq -r '.provider // "generic"' "$config")"
       url="$(jq -r '.url' "$config")"; token="$(jq -r '.token // ""' "$config")"
       send_http "$url" "$event" "$token" "$provider" ;;
+    otlp)
+      url="$(jq -r '.url // ""' "$config")"; token="$(jq -r '.token // ""' "$config")"
+      send_otlp "$url" "$event" "$token" "$(jq -r '.service_name // "liteedge"' "$config")" ;;
     *) return 1 ;;
   esac
 }

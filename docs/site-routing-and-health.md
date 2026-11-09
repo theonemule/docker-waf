@@ -146,7 +146,7 @@ active health checking.
 
 ## Log Export in Server Settings
 
-Use **Server Settings → Log Export** to configure RFC 5424 syslog or HTTPS event collection. It has its own Save button and does not modify SMTP email configuration. The previous `/admin/collector` address and its save endpoint remain compatible, redirecting to this section. **Server Settings** is last in the navigation menu.
+Use **Server Settings → Log Export** to choose RFC 5424 syslog, vendor-specific HTTPS JSON collection, or **OpenTelemetry OTLP/HTTP JSON**. The form only displays fields for the active exporter: syslog server/port/UDP-TCP-TLS transport; HTTPS collector/provider/token; or OpenTelemetry endpoint, service name and optional bearer token. OTLP accepts `http://collector:4318/v1/logs` for unauthenticated internal deployments and `https://collector.example.com/v1/logs` with or without a token; gRPC is not supported. It has its own Save button and does not modify SMTP email configuration. The previous `/admin/collector` address and its save endpoint remain compatible, redirecting to this section. **Server Settings** is last in the navigation menu.
 
 ## Log filtering and retained settings
 

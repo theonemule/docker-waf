@@ -236,6 +236,15 @@
       +'<button class="btn btn-sm btn-outline-danger" type="button" data-operation="pool-remove">Remove</button></div>';
   }
 
+  function updateExporterFields(form) {
+    const mode=form.querySelector('select[name="mode"]')?.value||"off";
+    for(const group of form.querySelectorAll("[data-export-mode]")){
+      const active=group.dataset.exportMode===mode;
+      group.hidden=!active;
+      group.style.display=active?"":"none";
+      for(const control of group.querySelectorAll("input,select,textarea"))control.disabled=!active;
+    }
+  }
   function renderServer(data) {
     const v=data.settings||{},c=data.collector||{};
     root.innerHTML='<h1 class="h3 mb-3">Server Settings</h1>'
@@ -254,14 +263,22 @@
         +field("Username","smtp_user",c.smtp_user||"")
         +field("Password (blank keeps saved password)","smtp_password","","password","autocomplete=new-password")
         +'</div>',"Save SMTP settings"))
-      +card("Log Export",form("collector/save",'<div class="spa-form-grid">'
-        +select("Transport","mode",[["off","Disabled"],["syslog","RFC 5424 syslog"],["https","HTTPS collector"]],c.mode||"off")
-        +field("Syslog hostname","host",c.host||"")
-        +field("Syslog port","port",c.port||"514","number")
-        +select("Syslog protocol","protocol",[["udp","UDP"],["tcp","TCP"],["tls","TLS"]],c.protocol||"udp")
-        +select("HTTPS provider","provider",[["generic","Generic"],["splunk","Splunk HEC"],["datadog","Datadog"],["elastic","Elasticsearch"]],c.provider||"generic")
-        +field("Collector endpoint","url",c.url||"","url")
-        +field("API token (blank keeps saved token)","token","","password","autocomplete=new-password")
+      +card("Log Export",'<p class="text-secondary small">Choose a log exporter. Only fields supported by that exporter are shown. Local logs remain available.</p>'
+        +form("collector/save",'<div class="spa-form-grid">'
+        +select("Exporter","mode",[["off","Disabled"],["syslog","RFC 5424 syslog"],["https","HTTP collector"],["otlp","OpenTelemetry (OTLP/HTTP JSON)"]],c.mode||"off")
+        +'</div><div class="spa-form-grid mt-3" data-export-mode="syslog">'
+        +field("Syslog hostname","host",c.host||"","text","required")
+        +field("Syslog port","port",c.port||"514","number","min=1 max=65535 required")
+        +select("Transport","protocol",[["udp","UDP"],["tcp","TCP"],["tls","TCP + TLS"]],c.protocol||"udp")
+        +'</div><div class="spa-form-grid mt-3" data-export-mode="https">'
+        +select("HTTP collector","provider",[["generic","Generic JSON"],["splunk","Splunk HEC"],["datadog","Datadog Logs"],["elastic","Elasticsearch Bulk"]],c.provider||"generic")
+        +field("HTTPS endpoint","url",c.mode==="https"?(c.url||""):"","url",'required placeholder="https://collector.example.com/events"')
+        +field("API token (blank keeps saved token for same destination)","token","","password","autocomplete=new-password")
+        +'</div><div class="spa-form-grid mt-3" data-export-mode="otlp">'
+        +'<p class="form-text mb-0">Transport: OTLP/HTTP JSON (POST /v1/logs). HTTPS is recommended; HTTP is available for trusted local collectors without authentication. gRPC is not supported.</p>'
+        +field("OTLP logs endpoint","url",c.mode==="otlp"?(c.url||""):"","url",'required placeholder="http://otel-collector:4318/v1/logs"')
+        +field("Service name","service_name",c.service_name||"liteedge","text","required maxlength=128")
+        +field("Bearer token (optional; requires HTTPS)","token","","password","autocomplete=new-password")
         +'</div>',"Save export configuration"))
       +card("Full Backup & Restore",'<p>Download all persistent LiteEdge configuration, sites, certificates, authentication, WAF rules, imported configuration, and alert settings. <strong>Logs are excluded.</strong></p>'
         +'<p class="small text-warning-emphasis">The archive includes private keys and administrator authentication data. Keep it secure. Restoring replaces the current saved configuration and may require signing in again; existing logs remain untouched.</p>'
@@ -272,6 +289,7 @@
         +field("Confirm new password","confirm_password","","password","minlength=10 required autocomplete=new-password")
         +'</div><p class="small text-secondary mt-2">Changing the password invalidates the previously cached Basic credentials. Authenticate again on your next API call.</p>',
         "Change administrator password"));
+    updateExporterFields(root.querySelector('form[data-api-action="collector/save"]'));
   }
   function renderAlerts(data) {
     cache.catalog=data.catalog||{hosts:[],routes:[]};
@@ -714,6 +732,10 @@
     }
   }
   document.addEventListener("change",event=>{
+    if(event.target.matches('form[data-api-action="collector/save"] select[name="mode"]')){
+      updateExporterFields(event.target.closest("form"));
+      return;
+    }
     if(!event.target.matches("[data-log-host], [data-log-route]"))return;
     const form=event.target.closest("[data-log-search]");
     if(!form)return;

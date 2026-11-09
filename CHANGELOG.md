@@ -1,3 +1,19 @@
+## November 9, 2026 — LiteEdge v3.1.5 source release
+
+- Add OTLP/HTTP JSON log export with typed event attributes, configurable service name,
+  TLS-protected bearer authentication, retry behavior, and standard `/v1/logs` endpoints.
+- Make the SPA and legacy Log Export forms display only the active exporter transport
+  controls. Preserve existing RFC 5424 syslog, HTTPS vendor adapters, and SMTP setup.
+- Prevent tokens from being silently reused when changing exporter or destination.
+- Add OTLP delivery/security and SPA exporter regression tests.
+- Provide a checksum-verified `upgrade-liteedge.sh` release asset with Docker Compose
+  and native Alpine/OpenRC in-place upgrades; preserve user configuration and state
+  and roll back service changes on failed activation.
+- Package the upgrade script and SHA-256 checksum with the runtime, Docker image,
+  VM ISO and bare-metal ISO for v3.1.5.
+- Once v3.1.5 assets are published and verified, clean up GitHub release entries
+  and matching tags for versions v3.1.4 and earlier.
+
 ## October 30, 2026 — LiteEdge v3.1.4 full release
 
 - Release the per-route HTTP method allowlist with a Select All action;

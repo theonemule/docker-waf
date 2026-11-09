@@ -1395,21 +1395,41 @@ HTML
 }
 
 collector_panel() {
-  local config mode
+  local config mode http_url="" otlp_url=""
   config="$(/opt/liteedge/bin/obsctl.sh collector)"
   mode="$(jq -r '.mode // "off"' <<< "$config")"
+  if [[ "$mode" == https ]]; then http_url="$(jq -r '.url // ""' <<< "$config")"; fi
+  if [[ "$mode" == otlp ]]; then otlp_url="$(jq -r '.url // ""' <<< "$config")"; fi
   cat <<HTML
-<section class="card shadow-sm mt-4" id="log-export" aria-labelledby="logExportHeading"><div class="card-header"><strong id="logExportHeading">Log Export</strong></div><p class="text-secondary px-3 pt-3 mb-0">Forward structured JSON events to syslog or HTTPS collectors. Local logging continues if the remote collector fails.</p>
-<form method="post" action="/admin/collector/save"><div class="card-body"><div class="row g-3">
-<div class="col-md-4"><label class="form-label">Log export transport</label><select name="mode" class="form-select" data-selected="$mode"><option value="off">Disabled</option><option value="syslog">Syslog RFC 5424</option><option value="https">HTTPS collector</option></select></div>
-<div class="col-md-4"><label class="form-label">Syslog server</label><input class="form-control" name="host" value="$(html_escape "$(jq -r '.host // ""' <<< "$config")")" placeholder="logs.internal.example"></div>
-<div class="col-md-2"><label class="form-label">Syslog port</label><input class="form-control" type="number" name="port" value="$(html_escape "$(jq -r '.port // 514' <<< "$config")")"></div>
-<div class="col-md-2"><label class="form-label">Syslog transport</label><select class="form-select" name="protocol" data-selected="$(html_escape "$(jq -r '.protocol // "udp"' <<< "$config")")"><option>udp</option><option>tcp</option><option>tls</option></select></div>
-<div class="col-md-4"><label class="form-label">HTTP collector provider</label><select class="form-select" name="provider" data-selected="$(html_escape "$(jq -r '.provider // "generic"' <<< "$config")")"><option>generic</option><option>splunk</option><option>datadog</option><option>elastic</option></select></div>
-<div class="col-md-8"><label class="form-label">HTTPS collector endpoint</label><input class="form-control" name="url" value="$(html_escape "$(jq -r '.url // ""' <<< "$config")")" placeholder="https://collector.example.com/events"></div>
-<div class="col-md-12"><label class="form-label">API token (leave blank to keep existing)</label><input class="form-control" type="password" autocomplete="new-password" name="token"></div>
-</div></div><div class="card-footer text-end"><button class="btn btn-primary">Save export configuration</button></div></form>
-<p class="small text-secondary px-3 mt-3">Delivery status and retry errors are recorded in <code>/data/logs/observability-worker.log</code>. Events and configuration persist under <code>/data</code>. Restrict collector endpoints to trusted destinations.</p>
+<section class="card shadow-sm mt-4" id="log-export" aria-labelledby="logExportHeading"><div class="card-header"><strong id="logExportHeading">Log Export</strong></div>
+<p class="text-secondary px-3 pt-3 mb-0">Forward structured events to RFC 5424 syslog, HTTPS JSON or OpenTelemetry OTLP/HTTP. Local logging continues if the remote collector fails.</p>
+<form method="post" action="/admin/collector/save" data-export-form><div class="card-body">
+<div class="row g-3"><div class="col-md-4"><label class="form-label">Exporter</label><select name="mode" class="form-select">
+<option value="off" $(selected "$mode" off)>Disabled</option><option value="syslog" $(selected "$mode" syslog)>RFC 5424 syslog</option>
+<option value="https" $(selected "$mode" https)>HTTP collector</option><option value="otlp" $(selected "$mode" otlp)>OpenTelemetry (OTLP/HTTP JSON)</option>
+</select></div></div>
+<div class="row g-3 mt-2" data-export-mode="syslog">
+<div class="col-md-4"><label class="form-label">Syslog server</label><input class="form-control" name="host" value="$(html_escape "$(jq -r '.host // ""' <<< "$config")")" required></div>
+<div class="col-md-2"><label class="form-label">Syslog port</label><input class="form-control" type="number" min="1" max="65535" name="port" value="$(html_escape "$(jq -r '.port // 514' <<< "$config")")" required></div>
+<div class="col-md-2"><label class="form-label">Transport</label><select class="form-select" name="protocol">
+<option value="udp" $(selected "$(jq -r '.protocol // "udp"' <<< "$config")" udp)>UDP</option><option value="tcp" $(selected "$(jq -r '.protocol // "udp"' <<< "$config")" tcp)>TCP</option><option value="tls" $(selected "$(jq -r '.protocol // "udp"' <<< "$config")" tls)>TCP + TLS</option>
+</select></div></div>
+<div class="row g-3 mt-2" data-export-mode="https">
+<div class="col-md-4"><label class="form-label">HTTP collector provider</label><select class="form-select" name="provider">
+<option value="generic" $(selected "$(jq -r '.provider // "generic"' <<< "$config")" generic)>Generic JSON</option>
+<option value="splunk" $(selected "$(jq -r '.provider // "generic"' <<< "$config")" splunk)>Splunk HEC</option>
+<option value="datadog" $(selected "$(jq -r '.provider // "generic"' <<< "$config")" datadog)>Datadog Logs</option>
+<option value="elastic" $(selected "$(jq -r '.provider // "generic"' <<< "$config")" elastic)>Elasticsearch Bulk</option>
+</select></div>
+<div class="col-md-8"><label class="form-label">HTTPS endpoint</label><input class="form-control" type="url" name="url" value="$(html_escape "$http_url")" required></div>
+<div class="col-md-12"><label class="form-label">API token (blank keeps existing token for the same destination)</label><input class="form-control" type="password" autocomplete="new-password" name="token"></div></div>
+<div class="row g-3 mt-2" data-export-mode="otlp">
+<p class="form-text mb-0">Transport: OTLP/HTTP JSON (POST /v1/logs). HTTP is for trusted unauthenticated collectors; gRPC is not supported.</p>
+<div class="col-md-8"><label class="form-label">OTLP logs endpoint</label><input class="form-control" type="url" name="url" value="$(html_escape "$otlp_url")" placeholder="http://otel-collector:4318/v1/logs" required></div>
+<div class="col-md-4"><label class="form-label">Service name</label><input class="form-control" name="service_name" value="$(html_escape "$(jq -r '.service_name // "liteedge"' <<< "$config")")" required></div>
+<div class="col-md-12"><label class="form-label">Bearer token (optional; requires HTTPS)</label><input class="form-control" type="password" autocomplete="new-password" name="token"></div></div>
+</div><div class="card-footer text-end"><button class="btn btn-primary">Save export configuration</button></div></form>
+<p class="small text-secondary px-3 mt-3">Delivery status and retry errors are recorded in <code>/data/logs/observability-worker.log</code>. Restrict collector endpoints to trusted destinations.</p>
 </section>
 HTML
 }
@@ -1578,7 +1598,7 @@ handle_post() {
       redirect "/admin/alerts"
       ;;
     /admin/collector/save)
-      run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}"
+      run_or_error /opt/liteedge/bin/obsctl.sh collector-save "${PARAM[mode]:-off}" "${PARAM[host]:-}" "${PARAM[port]:-514}" "${PARAM[protocol]:-udp}" "${PARAM[provider]:-generic}" "${PARAM[url]:-}" "${PARAM[token]:-}" "${PARAM[service_name]:-liteedge}"
       redirect "/admin/server#log-export"
       ;;
     /admin/password/change)

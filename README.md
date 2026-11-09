@@ -42,6 +42,54 @@ The management plane is intentionally small:
 - Flat-file persistent configuration
 - No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
+## Upgrade an existing installation to v3.1.5
+
+Release v3.1.5 provides a **single in-place upgrader** for Docker Compose
+and native Alpine/OpenRC installs. It does not reset credentials, sites,
+certificates, WAF settings, observability configuration, or persistent logs.
+The upgrader is pinned to `v3.1.5`, verifies the Alpine archive's SHA-256,
+and attempts to restore the prior runtime/version on failed activation.
+
+Download the script and its checksum from the
+[LiteEdge v3.1.5 release](https://github.com/theonemule/docker-waf/releases/tag/v3.1.5):
+
+```bash
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.5/upgrade-liteedge.sh
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.5/upgrade-liteedge.sh.sha256
+sha256sum -c upgrade-liteedge.sh.sha256
+chmod +x upgrade-liteedge.sh
+```
+
+For an existing **Docker Compose** installation, run from anywhere and
+specify its directory containing `docker-compose.yml`, `.env`, and `data/`:
+
+```bash
+./upgrade-liteedge.sh --mode docker --compose-dir /path/to/liteedge
+```
+
+The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.1.5`,
+modifies only `LITEEDGE_VERSION` in the existing `.env`, re-creates
+the service via Compose, and verifies container health. Compose overrides,
+custom environment values, and `data/` remain unchanged. If activation fails,
+it restores `.env` and attempts to relaunch the prior image.
+
+For a **standalone Alpine/OpenRC** installation:
+
+```bash
+sudo ./upgrade-liteedge.sh --mode alpine
+```
+
+This verifies and stages the official x86-64 runtime archive before stopping
+LiteEdge. It swaps `/opt/liteedge`, updates the OpenRC service and NGINX
+file capability, and checks the restarted service. On failure the original
+executable tree and service definition are restored. Persistent
+`/var/lib/liteedge` and `/etc/conf.d/liteedge` are untouched.
+Use `--no-start` only for an intentionally stopped Alpine maintenance
+upgrade. A new install should use the release installers instead.
+
+To validate the upgrade paths locally, run `bash tests/test-upgrade.sh`
+and `bash tests/test-upgrade-alpine.sh` (the latter requires Docker).
+
 ## Release contents
 
 Each release asset contains the complete LiteEdge runtime under /opt/liteedge:
@@ -381,9 +429,20 @@ under `/data/observability/health`. Probe transitions are logged in
 `/data/logs/events.jsonl`; worker diagnostics go to
 `/data/logs/health-worker.log`.
 
-**Server Settings → Log Export** configures one external sink, either RFC 5424 syslog
-(UDP, TCP, or certificate-verified TLS) or HTTPS JSON. HTTPS adapters support
-Splunk HEC, Datadog Logs, and Elasticsearch Bulk. Configure SMTP for email
+**Server Settings → Log Export** configures one external sink: RFC 5424 syslog
+(UDP, TCP, or certificate-verified TLS), HTTPS JSON (Generic, Splunk HEC,
+Datadog Logs, or Elasticsearch Bulk), or **OpenTelemetry logs using OTLP/HTTP
+JSON**. The selected exporter determines which transport and endpoint controls
+are visible; inactive controls are not submitted. For OpenTelemetry, configure
+the complete logs endpoint, e.g. `http://otel-collector:4318/v1/logs` on a
+trusted local network, or `https://collector.example.com/v1/logs` for a
+TLS-secured destination. OTLP uses HTTP POST, content type `application/json`,
+a configurable `service.name` resource attribute (default `liteedge`),
+and carries typed original `liteedge.*` event attributes. OTLP/gRPC, metrics,
+and traces are not implemented by this log exporter. Credentials require HTTPS;
+unauthenticated HTTP is supported for internal OTLP collectors. An existing
+saved bearer/API token is retained only when the exporter, provider and URL
+remain unchanged, so changing destinations cannot silently reuse credentials. Configure SMTP for email
 alerts separately in **Server Settings → SMTP email for alerts**. Set an SMTP
 hostname, STARTTLS port (default 587), sender address, optional username,
 and password, then save. The SMTP form preserves an existing password when left
@@ -400,8 +459,10 @@ using copytruncate for uninterrupted writes. Worker failures appear in
 `/data/logs/observability-worker.log`; the worker retries export/notifications,
 with delivery cursors and alert cooldown state persisted under `/data/observability`.
 
-Run `bash tests/test-observability.sh` to exercise filtering, synthetic WAF
-normalization, alert delivery/cooldown, redaction and collector validation.
+Run `bash tests/test-observability.sh` for filtering, synthetic WAF
+normalization, alert delivery/cooldown and legacy collector validation. Run
+`bash tests/test-otlp.sh` for OTLP/HTTP payloads, security and retry handling,
+and `node tests/test-spa-exporter.js` for exporter-specific form controls.
 
 ### Inventory-backed alert scopes
 
@@ -586,17 +647,4 @@ or UEFI VM. UEFI Secure Boot is **not** supported by the unsigned GRUB loader.
    administrator password configured interactively during ISO installation;
    it does **not** generate a second password.
 4. Open `https://VM_IP:8443/` and sign in with the LiteEdge web admin username
-   and password you chose during setup (default username: `admin`). The root
-   account password is **only** for the Linux console/SSH. Routes listen on
-   80/443. The state is persisted under `/var/lib/liteedge`. No plaintext
-   web-admin password is written to installation logs.
-   To change the password later, use **Server Settings**.
-
-The installer preserves no baked-in user password, SSH host keys, API tokens,
-or signing private key. The live disk installer requires intentional disk
-selection and typing **ERASE**. The ISO's Alpine APK signing index is generated
-at build time, and its public signing key is embedded by the Alpine image
-builder. This is a fresh installation, not a backup/restore of the existing
-LiteEdge appliance. The first-boot service fails closed if a dependency or
-release checksum is missing or invalid; its diagnostic output is stored in
-`/root/liteedge-install.txt`.
+   and password you chose during setup (default username: `admin`). T

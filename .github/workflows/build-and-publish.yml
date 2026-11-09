@@ -40,6 +40,9 @@ jobs:
           set -euo pipefail
           bash tests/test-deployment.sh
           bash tests/test-observability.sh
+          bash tests/test-otlp.sh
+          bash tests/test-upgrade.sh
+          bash tests/test-upgrade-alpine.sh
           bash tests/test-lb-health.sh
           bash tests/test-alert-selectors.sh
           bash tests/test-log-selectors.sh
@@ -50,6 +53,7 @@ jobs:
           python3 tests/test-iso-admin-setup.py
           node tests/test-backend-pool-ui.js
           node tests/test-spa-static.js
+          node tests/test-spa-exporter.js
           node tests/test-spa-log-filters.js
           node tests/test-spa-dropdown-dismiss.js
           node tests/test-ui-import.js
@@ -73,8 +77,8 @@ jobs:
           set -euo pipefail
           if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
             version="${GITHUB_REF_NAME#v}"
-          elif [[ "$GITHUB_REF" == refs/heads/master && "${{ contains(github.event.head_commit.message, '[publish-release v3.1.4]') }}" == true ]]; then
-            version="3.1.4"
+          elif [[ "$GITHUB_REF" == refs/heads/master && "${{ contains(github.event.head_commit.message, '[publish-release v3.1.5]') }}" == true ]]; then
+            version="3.1.5"
           else
             version="3.0.0-ci.${GITHUB_RUN_NUMBER}"
           fi
@@ -86,12 +90,15 @@ jobs:
           set -euo pipefail
           BUILD_JOBS=2 ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
           cp scripts/install-alpine.sh dist/install-alpine.sh
+          cp scripts/upgrade-liteedge.sh dist/upgrade-liteedge.sh
+          chmod +x dist/upgrade-liteedge.sh
           # Bind the published installer to the exact release's Compose asset.
           sed "s/__LITEEDGE_RELEASE_TAG__/v${{ steps.version.outputs.version }}/g" install.sh > dist/install-docker.sh
           chmod +x dist/install-docker.sh
           cp docker-compose.yml dist/docker-compose.yml
           (cd dist && sha256sum docker-compose.yml > docker-compose.yml.sha256)
-          (cd dist && sha256sum install-alpine.sh install-docker.sh > installers.sha256)
+          (cd dist && sha256sum upgrade-liteedge.sh > upgrade-liteedge.sh.sha256)
+          (cd dist && sha256sum install-alpine.sh install-docker.sh upgrade-liteedge.sh > installers.sha256)
 
       - name: Upload standalone appliance artifacts
         uses: actions/upload-artifact@v4
@@ -102,6 +109,8 @@ jobs:
             dist/liteedge-linux-musl-x86_64.tar.gz.sha256
             dist/install-alpine.sh
             dist/install-docker.sh
+            dist/upgrade-liteedge.sh
+            dist/upgrade-liteedge.sh.sha256
             dist/docker-compose.yml
             dist/docker-compose.yml.sha256
             dist/installers.sha256
@@ -224,9 +233,9 @@ jobs:
             docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:$tag"
             docker push "${IMAGE_NAME}:$tag"
           done
-          if [[ "${{ contains(github.event.head_commit.message, '[publish-release v3.1.4]') }}" == true ]]; then
-            docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:v3.1.4"
-            docker push "${IMAGE_NAME}:v3.1.4"
+          if [[ "${{ contains(github.event.head_commit.message, '[publish-release v3.1.5]') }}" == true ]]; then
+            docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:v3.1.5"
+            docker push "${IMAGE_NAME}:v3.1.5"
           fi
 
       - name: Publish release image tag
@@ -240,7 +249,7 @@ jobs:
           docker push "${IMAGE_NAME}:v3"
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v3.') || (github.event_name == 'push' && github.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[publish-release v3.1.4]'))
+    if: startsWith(github.ref, 'refs/tags/v3.') || (github.event_name == 'push' && github.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[publish-release v3.1.5]'))
     needs: [build-appliance, build-container, build-iso]
     runs-on: ubuntu-latest
     permissions:
@@ -271,9 +280,11 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF" == refs/heads/master ]]; then tag=v3.1.4; fi
+          if [[ "$GITHUB_REF" == refs/heads/master ]]; then tag=v3.1.5; fi
           (cd dist && sha256sum -c *.sha256)
           test -s "dist/liteedge-linux-musl-x86_64.tar.gz"
+          test -s "dist/upgrade-liteedge.sh"
+          (cd dist && sha256sum -c upgrade-liteedge.sh.sha256)
           test -s "dist/liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
           test -s "dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
           if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
@@ -286,3 +297,31 @@ jobs:
               --title "LiteEdge $tag — binaries, VM and bare-metal installers" \
               --generate-notes
           fi
+      - name: Remove obsolete releases and matching tags once v3.1.5 is complete
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_NAME}" != v3.1.5 &&
+                "${{ contains(github.event.head_commit.message, '[publish-release v3.1.5]') }}" != true ]]; then
+            exit 0
+          fi
+          # Never delete a prior release until v3.1.5 has all required assets.
+          assets="$(gh release view v3.1.5 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for required in liteedge-linux-musl-x86_64.tar.gz \
+            "liteedge-vm-installer-3.1.5-x86_64.iso" \
+            "liteedge-baremetal-installer-3.1.5-x86_64.iso" \
+            upgrade-liteedge.sh upgrade-liteedge.sh.sha256; do
+            grep -qx "$required" <<< "$assets" || { echo "Missing v3.1.5 asset: $required" >&2; exit 1; }
+          done
+          while IFS= read -r old; do
+            [[ "$old" =~ ^v3\.[0-9]+\.[0-9]+$ ]] || continue
+            [[ "$old" != v3.1.5 ]] || continue
+            version="${old#v}"
+            if [[ "$(printf '%s\n' "$version" '3.1.4' | sort -V | tail -n1)" == '3.1.4' ]]; then
+              echo "Removing obsolete release and tag: $old"
+              gh release delete "$old" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
+            fi
+          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName')

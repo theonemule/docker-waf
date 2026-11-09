@@ -23,6 +23,13 @@ valid_host() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$ ]] && [[ "$1" != *..
 valid_port() { [[ "$1" =~ ^[0-9]{1,5}$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 )); }
 valid_email() { [[ "$1" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$ ]]; }
 valid_https() { [[ "$1" =~ ^https://[A-Za-z0-9._-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/?%+-]*)?$ ]] && [[ "$1" != *..* ]]; }
+# OTLP/HTTP JSON logs use the standard /v1/logs endpoint.
+# Plain HTTP is intended only for unauthenticated internal collectors.
+valid_otlp() {
+  [[ "$1" != *..* ]] || return 1
+  [[ "$1" =~ ^https?://[A-Za-z0-9][A-Za-z0-9._-]*(:([0-9]{1,5}))?/v1/logs$ ]] || return 1
+  [[ -z "${BASH_REMATCH[2]:-}" ]] || valid_port "${BASH_REMATCH[2]}"
+}
 
 # Each JSON document is checked by jq. No shell evaluation of user-defined filters.
 query() {
@@ -94,22 +101,30 @@ query() {
 }
 
 save_collector() {
-  local mode="$1" host="$2" port="$3" protocol="$4" provider="$5" url="$6" token="$7"
-  [[ "$mode" == off || "$mode" == syslog || "$mode" == https ]] || die 'Unsupported collector mode.'
+  local mode="$1" host="$2" port="$3" protocol="$4" provider="$5" url="$6" token="$7" service_name="${8:-liteedge}"
+  [[ "$mode" == off || "$mode" == syslog || "$mode" == https || "$mode" == otlp ]] || die 'Unsupported collector mode.'
   [[ "$protocol" == udp || "$protocol" == tcp || "$protocol" == tls ]] || die 'Unsupported syslog transport.'
   [[ "$provider" == generic || "$provider" == splunk || "$provider" == datadog || "$provider" == elastic ]] || die 'Unsupported HTTP collector.'
   if [[ "$mode" == syslog ]]; then
     if ! { valid_host "$host" && valid_port "$port"; }; then die 'Invalid syslog host or port.'; fi
   fi
   if [[ "$mode" == https ]]; then valid_https "$url" || die 'Collector must be an HTTPS URL.'; fi
+  if [[ "$mode" == otlp ]]; then
+    valid_otlp "$url" || die 'OTLP/HTTP endpoint must be http(s)://host[:port]/v1/logs.'
+    [[ "$service_name" =~ ^[A-Za-z0-9_.-]{1,128}$ ]] || die 'Invalid OTLP service name.'
+    [[ "$url" != http://* || -z "$token" ]] || die 'OTLP credentials require HTTPS.'
+  fi
   # Keep all SMTP settings untouched when saving a log export sink. Previously
   # omitting SMTP controls from the exporter form erased the mail configuration.
   jq -n --argjson previous "$(cat "$COLLECTOR")" \
     --arg mode "$mode" --arg host "$host" --arg port "$port" --arg protocol "$protocol" \
-    --arg provider "$provider" --arg url "$url" --arg token "$token" '
+    --arg provider "$provider" --arg url "$url" --arg token "$token" --arg service_name "$service_name" '
     $previous + {mode:$mode,host:$host,port:($port|tonumber),protocol:$protocol,
-      provider:$provider,url:$url,
-      token:(if $token=="" then ($previous.token // "") else $token end)}' | atomic_file "$COLLECTOR"
+      provider:$provider,url:$url,service_name:$service_name,
+      token:(if $token!="" then $token
+             elif ($previous.mode // "")==$mode and ($previous.url // "")==$url
+               and ($previous.provider // "generic")==$provider then ($previous.token // "")
+             else "" end)}' | atomic_file "$COLLECTOR"
 }
 
 save_smtp() {
