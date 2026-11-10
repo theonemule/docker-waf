@@ -1,3 +1,18 @@
+## November 10, 2026 — LiteEdge v3.1.6 route traffic safeguards
+
+- Optional per-route IPv4/IPv6 IP-address and CIDR source allowlists, returning
+  HTTP 403 for unlisted clients.
+- Per-source-IP, per-route request rate limits (requests/second or minute),
+  returning HTTP 429 when exceeded, using NGINX shared-memory rate zones.
+- Optional per-route maximum request body size, returning HTTP 413 when exceeded.
+- All three controls are configurable in SPA and legacy admin forms, available
+  in the JSON API, persisted with route records, and validated on update.
+- Existing routes retain disabled/unrestricted defaults; rate-zone generation
+  participates in NGINX configuration validation and rollback.
+- Reproducible proxy-level regression tests for access, rate, and body limits.
+- In-place v3.1.6 Docker/Alpine upgrade script retains persistent configuration
+  and rolls back if activation fails.
+
 ## November 9, 2026 — LiteEdge v3.1.5 source release
 
 - Add OTLP/HTTP JSON log export with typed event attributes, configurable service name,

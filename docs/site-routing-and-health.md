@@ -202,3 +202,15 @@ python3 tests/test-http-api-coverage.py
 The suite checks pool validation, probe failure/recovery thresholds, managed
 imported routes, log filtering, and management action coverage. HTTP
 integration tests use a disposable Docker container, not live site data.
+## Optional route traffic controls
+
+Each reverse-proxy route can configure source IP and CIDR allowlisting, an NGINX
+request rate in requests per second or minute (per source IP and route), and a
+maximum client request body such as `512k` or `10m`. Each is disabled unless
+configured; an empty source list permits all, rate 0 disables throttling, and an
+empty body size inherits the server's 4 MiB default. Responses are HTTP 403,
+429, and 413 respectively. NGINX uses a leaky-bucket request algorithm without
+a burst allowance, not a fixed minute counter. HTTP-to-HTTPS redirects may
+return 301 before NGINX access-phase policy checks. When LightEdge operates
+behind another proxy, ensure trusted client-IP handling before using per-IP
+policies. Never trust arbitrary client-supplied X-Forwarded-For headers.

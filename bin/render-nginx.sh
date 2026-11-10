@@ -15,6 +15,13 @@ trap 'rm -rf "$stage" "$baseline_stage" "$diff_stage" "$waf_route_stage"' EXIT
 # An upstream is declared in the http context before vhost locations refer to it.
 pool_staged="$(mktemp "$NGINX_DIR/.upstreams.XXXXXXXX")"
 pool_previous="$(mktemp "$NGINX_DIR/.upstreams.previous.XXXXXXXX")"
+zone_staged="$(mktemp "$NGINX_DIR/.route-limits.staged.XXXXXXXX")"
+zone_previous="$(mktemp "$NGINX_DIR/.route-limits.previous.XXXXXXXX")"
+zone_existed=0
+if [[ -f "$NGINX_DIR/route-limits.conf" ]]; then
+  cp "$NGINX_DIR/route-limits.conf" "$zone_previous"
+  zone_existed=1
+fi
 [[ -f "$NGINX_DIR/upstreams.conf" ]] && cp "$NGINX_DIR/upstreams.conf" "$pool_previous"
 pool_render_upstreams "$pool_staged"
 cp "$pool_staged" "$NGINX_DIR/upstreams.conf"
@@ -22,8 +29,9 @@ cleanup() {
   local code=$?
   if (( code != 0 )); then
     if [[ -s "$pool_previous" ]]; then cp "$pool_previous" "$NGINX_DIR/upstreams.conf"; else rm -f "$NGINX_DIR/upstreams.conf"; fi
+    if [[ "$zone_existed" == 1 ]]; then cp "$zone_previous" "$NGINX_DIR/route-limits.conf"; else rm -f "$NGINX_DIR/route-limits.conf"; fi
   fi
-  rm -rf "$stage" "$baseline_stage" "$diff_stage" "$waf_route_stage" "$pool_staged" "$pool_previous"
+  rm -rf "$stage" "$baseline_stage" "$diff_stage" "$waf_route_stage" "$pool_staged" "$pool_previous" "$zone_staged" "$zone_previous"
 }
 trap cleanup EXIT
 
@@ -136,6 +144,10 @@ emit_route_values() {
   local host="$1" match="$2" path="$3" target="$4" websocket="$5"
   local timeout="$6" waf="$7" force_https="$8" waf_pl="$9" waf_plugins="${10}" waf_disabled="${11}" scheme="${12}" cert_exists="${13}"
   local location id methods rewrite_enabled rewrite_pattern rewrite_replacement header_blob header_line header_name header_value header_text
+  local allow_ips="${14:-}" rate_count="${15:-0}" rate_unit="${16:-m}" max_body="${17:-}" zone="${18:-}" address
+  allow_ips="$(normalize_allow_ips "$allow_ips")"
+  validate_route_rate "$rate_count" "$rate_unit"
+  validate_route_body_size "$max_body"
 
   case "$match" in
     exact) location="location = $path" ;;
@@ -146,6 +158,18 @@ emit_route_values() {
   id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
   printf '    %s {\n' "$location"
   printf '        set $liteedge_route "%s";\n' "$match:$path"
+  if [[ -n "$allow_ips" ]]; then
+    local -a addresses=()
+    IFS=',' read -r -a addresses <<< "$allow_ips"
+    for address in "${addresses[@]}"; do printf '        allow %s;\n' "$address"; done
+    echo '        deny all;'
+  fi
+  if [[ "$rate_count" != 0 ]]; then
+    [[ -n "$zone" ]] || zone="$(route_limit_zone "$host" "$id")"
+    printf '        limit_req zone=%s;\n' "$zone"
+    echo '        limit_req_status 429;'
+  fi
+  [[ -z "$max_body" ]] || printf '        client_max_body_size %s;\n' "$max_body"
 
   if [[ "$scheme" == http && "$force_https" == 1 && "$cert_exists" == 1 ]]; then
     echo "        return 301 https://\$host$HTTPS_REDIRECT_SUFFIX\$request_uri;"
@@ -201,6 +225,7 @@ emit_route_values() {
 emit_route() {
   local host="$1" route="$2" scheme="$3" cert_exists="$4"
   local match path target websocket timeout waf force_https waf_pl waf_plugins waf_disabled legacy_profile
+  local allow_ips rate_count rate_unit max_body route_id guard_zone
   [[ "$(route_value "$route" ACTION proxy)" == custom ]] && return 0
   match="$(route_value "$route" MATCH prefix)"
   path="$(route_value "$route" PATH /)"
@@ -212,6 +237,15 @@ emit_route() {
   waf_pl="$(route_value "$route" WAF_PL "$(waf_setting_get PARANOIA_LEVEL 1)")"
   waf_plugins="$(route_value "$route" WAF_PLUGINS "")"
   waf_disabled="$(route_value "$route" WAF_DISABLED "")"
+  allow_ips="$(route_value "$route" ALLOW_IPS "")"
+  rate_count="$(route_value "$route" RATE_COUNT 0)"
+  rate_unit="$(route_value "$route" RATE_UNIT m)"
+  max_body="$(route_value "$route" MAX_BODY "")"
+  route_id="$(route_value "$route" ID "")"
+  if [[ ! "$route_id" =~ ^[a-f0-9]{16}$ ]]; then
+    route_id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
+  fi
+  guard_zone="$(route_limit_zone "$host" "$route_id")"
 
   legacy_profile="$(route_value "$route" PROFILE "")"
   if [[ -z "$waf_plugins" && "$legacy_profile" == wordpress && -d "$WAF_PLUGIN_DIR/wordpress-rule-exclusions" ]]; then
@@ -226,7 +260,7 @@ emit_route() {
   ROUTE_X_HEADERS_B64="$(route_value "$route" X_HEADERS_B64 "")"
   POOL_COOKIE_AFFINITY=0
   [[ -n "$(kv_get "$route" BACKENDS)" && "$(kv_get "$route" LB_MODE)" == cookie ]] && POOL_COOKIE_AFFINITY=1
-  emit_route_values "$host" "$match" "$path" "$target" "$websocket" "$timeout" "$waf" "$force_https" "$waf_pl" "$waf_plugins" "$waf_disabled" "$scheme" "$cert_exists"
+  emit_route_values "$host" "$match" "$path" "$target" "$websocket" "$timeout" "$waf" "$force_https" "$waf_pl" "$waf_plugins" "$waf_disabled" "$scheme" "$cert_exists" "$allow_ips" "$rate_count" "$rate_unit" "$max_body" "$guard_zone"
   POOL_COOKIE_AFFINITY=0
   unset ROUTE_METHODS ROUTE_REWRITE_ENABLED ROUTE_REWRITE_PATTERN ROUTE_REWRITE_REPLACEMENT ROUTE_X_HEADERS_B64
 }
@@ -273,6 +307,30 @@ emit_routes() {
     emit_route "$host" "$route" "$scheme" "$cert_exists"
   done
   emit_legacy_default "$host" "$file" "$scheme" "$cert_exists"
+}
+
+emit_route_limit_zones() {
+  local file host route rate_count rate_unit route_id match path target zone
+  for file in "$SITE_DIR"/*.site; do
+    host="$(kv_get "$file" HOST)"
+    for route in "$(route_dir "$host")"/*.route; do
+      [[ -e "$route" ]] || continue
+      [[ "$(route_value "$route" ACTION proxy)" != custom ]] || continue
+      rate_count="$(route_value "$route" RATE_COUNT 0)"
+      rate_unit="$(route_value "$route" RATE_UNIT m)"
+      validate_route_rate "$rate_count" "$rate_unit"
+      [[ "$rate_count" != 0 ]] || continue
+      route_id="$(route_value "$route" ID "")"
+      if [[ ! "$route_id" =~ ^[a-f0-9]{16}$ ]]; then
+        match="$(route_value "$route" MATCH prefix)"
+        path="$(route_value "$route" PATH /)"
+        target="$(route_value "$route" TARGET "")"
+        route_id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
+      fi
+      zone="$(route_limit_zone "$host" "$route_id")"
+      printf '    limit_req_zone $binary_remote_addr zone=%s:1m rate=%sr/%s;\n' "$zone" "$rate_count" "$rate_unit"
+    done
+  done
 }
 
 merge_manual_delta() {
@@ -391,6 +449,9 @@ CONF
   record_generated_diff "$host" "$generated"
   merge_manual_delta "$host" "$generated" "$out"
 done
+
+emit_route_limit_zones > "$zone_staged"
+cp "$zone_staged" "$NGINX_DIR/route-limits.conf"
 
 backup="${NGINX_SITE_DIR}.backup"
 waf_backup="${WAF_ROUTE_DIR}.backup"

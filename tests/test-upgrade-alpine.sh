@@ -24,7 +24,7 @@ cat > /tmp/release/opt/liteedge/entrypoint.sh <<'ENTRY'
 exit 0
 ENTRY
 echo '# new init' >/tmp/release/opt/liteedge/share/openrc/liteedge
-echo 'LiteEdge=3.1.5' >/tmp/release/opt/liteedge/VERSION
+echo 'LiteEdge=3.1.6' >/tmp/release/opt/liteedge/VERSION
 chmod +x /tmp/release/opt/liteedge/{sbin/nginx,entrypoint.sh}
 tar -czf /tmp/assets/liteedge-linux-musl-x86_64.tar.gz -C /tmp/release opt/liteedge
 (cd /tmp/assets && sha256sum liteedge-linux-musl-x86_64.tar.gz > liteedge-linux-musl-x86_64.tar.gz.sha256)
@@ -43,7 +43,7 @@ case "$2" in
   status) test -e /tmp/service-running ;;
   stop) rm -f /tmp/service-running ;;
   start)
-    if [[ "${FAIL_NEW:-0}" == 1 ]] && grep -qx 'LiteEdge=3.1.5' /opt/liteedge/VERSION; then exit 2; fi
+    if [[ "${FAIL_NEW:-0}" == 1 ]] && grep -qx 'LiteEdge=3.1.6' /opt/liteedge/VERSION; then exit 2; fi
     touch /tmp/service-running ;;
   *) exit 90 ;;
 esac
@@ -67,7 +67,7 @@ chmod +x /tmp/mocks/*
 export PATH="/tmp/mocks:$PATH"
 touch /tmp/service-running
 bash /tmp/upgrade-liteedge.sh --mode alpine
-grep -qx 'LiteEdge=3.1.5' /opt/liteedge/VERSION
+grep -qx 'LiteEdge=3.1.6' /opt/liteedge/VERSION
 grep -qx 'KEEP-THE-PERSISTENT-DATA' /var/lib/liteedge/sentinel
 grep -qx 'KEEP-THE-USER-CONFIG' /etc/conf.d/liteedge
 grep -qx '# new init' /etc/init.d/liteedge

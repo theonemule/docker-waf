@@ -230,6 +230,7 @@ case "$cmd" in
     health_interval="${19:-30}"; health_timeout="${20:-5}"; health_fall="${21:-3}"; health_rise="${22:-2}"; health_cooldown="${23:-300}"
     methods="${24:-ALL}"; rewrite_enabled="$(bool_value "${25:-0}")"
     rewrite_pattern="${26:-}"; rewrite_replacement="${27:-}"; x_headers="${28:-}"
+    allow_ips="${29:-}"; rate_count="${30:-0}"; rate_unit="${31:-m}"; max_body="${32:-}"
     validate_route_methods "$methods"
     validate_route_rewrite "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
     validate_route_headers "$x_headers"
@@ -267,6 +268,10 @@ source /opt/liteedge/bin/poolctl.sh
     validate_waf_pl "$waf_pl"
     waf_plugins="$(normalize_plugin_csv "$waf_plugins")"
     waf_disabled="$(normalize_rule_csv "$waf_disabled")"
+    allow_ips="$(normalize_allow_ips "$allow_ips")"
+    validate_route_rate "$rate_count" "$rate_unit"
+    validate_route_body_size "$max_body"
+    max_body="${max_body,,}"
     if [[ -n "$old_id" && ! "$old_id" =~ ^[a-f0-9]{16}$ ]]; then
       die "Invalid route id."
     fi
@@ -298,6 +303,7 @@ source /opt/liteedge/bin/poolctl.sh
       printf 'WAF_PL=%s\n' "$waf_pl"
       printf 'WAF_PLUGINS=%s\n' "$waf_plugins"
       printf 'WAF_DISABLED=%s\n' "$waf_disabled"
+      printf 'ALLOW_IPS=%s\nRATE_COUNT=%s\nRATE_UNIT=%s\nMAX_BODY=%s\n' "$allow_ips" "$rate_count" "$rate_unit" "$max_body"
       printf 'METHODS=%s\nREWRITE_ENABLED=%s\nREWRITE_PATTERN=%s\nREWRITE_REPLACEMENT=%s\n' "$methods" "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
       printf 'X_HEADERS_B64=%s\n' "$(printf '%s' "$x_headers" | base64 | tr -d '\n')"
       printf 'BACKENDS=%s\nLB_MODE=%s\nMAX_FAILS=%s\nFAIL_TIMEOUT=%s\n' "$backends" "$lb_mode" "$max_fails" "$fail_timeout"

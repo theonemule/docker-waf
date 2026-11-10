@@ -328,9 +328,26 @@ HTML
 HTML
 }
 
+route_guard_fields() {
+  local allow_ips="${1:-}" rate_count="${2:-0}" rate_unit="${3:-m}" max_body="${4:-}"
+  cat <<HTML
+<fieldset class="border rounded p-3 mt-3">
+<legend class="float-none w-auto fs-6 px-2">Traffic protection (optional)</legend>
+<div class="row g-3">
+<div class="col-12"><label class="form-label">Allowed client IPs / CIDR networks</label><textarea class="form-control font-monospace" rows="2" name="allow_ips" placeholder="192.0.2.10, 198.51.100.0/24, 2001:db8::/32">$(html_escape "$allow_ips")</textarea><div class="form-text">Blank permits everyone. A nonempty list blocks other client addresses with HTTP 403.</div></div>
+<div class="col-md-4"><label class="form-label">Requests (0 = off)</label><input class="form-control" type="number" name="rate_count" min="0" max="999999" value="$(html_escape "$rate_count")"></div>
+<div class="col-md-4"><label class="form-label">Per</label><select class="form-select" name="rate_unit"><option value="s" $(selected "$rate_unit" s)>Second</option><option value="m" $(selected "$rate_unit" m)>Minute</option></select></div>
+<div class="col-md-4"><label class="form-label">Max request body</label><input class="form-control" name="max_body" value="$(html_escape "$max_body")" placeholder="e.g. 10m, 512k"></div>
+</div>
+<div class="form-text mt-2">Limits are per connecting IP and route; excess requests return HTTP 429, oversized bodies return 413. Blank body size inherits LiteEdge's 4m site default. Behind another proxy, configure trusted real-IP handling separately.</div>
+</fieldset>
+HTML
+}
+
 routes_panel() {
   local host="$1" dir route id match path target websocket timeout waf force_https default_timeout
   local waf_pl waf_plugins waf_disabled legacy_profile plugin_count default_pl
+  local allow_ips rate_count rate_unit max_body
   dir="$(route_dir "$host")"
   default_timeout="$(server_setting_get DEFAULT_ROUTE_TIMEOUT 60)"
   default_pl="$(waf_setting_get PARANOIA_LEVEL 1)"
@@ -358,6 +375,10 @@ HTML
       waf_pl="$(kv_get "$route" WAF_PL)"; [[ "$waf_pl" =~ ^[1-4]$ ]] || waf_pl="$default_pl"
       waf_plugins="$(kv_get "$route" WAF_PLUGINS)"
       waf_disabled="$(kv_get "$route" WAF_DISABLED)"
+      allow_ips="$(kv_get "$route" ALLOW_IPS)"
+      rate_count="$(kv_get "$route" RATE_COUNT)"; [[ -n "$rate_count" ]] || rate_count=0
+      rate_unit="$(kv_get "$route" RATE_UNIT)"; [[ "$rate_unit" == s ]] || rate_unit=m
+      max_body="$(kv_get "$route" MAX_BODY)"
       legacy_profile="$(kv_get "$route" PROFILE)"
       if [[ -z "$waf_plugins" && "$legacy_profile" == wordpress && -d "$WAF_PLUGIN_DIR/wordpress-rule-exclusions" ]]; then
         waf_plugins=wordpress-rule-exclusions
@@ -418,6 +439,7 @@ HTML
 </div>
 <div class="col-12"><label class="form-label">Route-specific excluded rule IDs</label><input class="form-control font-monospace" name="waf_disabled" value="$(html_escape "$waf_disabled")" placeholder="942100,941100"><div class="form-text">Comma- or space-separated rule IDs. Global exclusions from the OWASP page also apply.</div></div>
 </div></div>
+$(route_guard_fields "$allow_ips" "$rate_count" "$rate_unit" "$max_body")
 <div class="d-flex flex-wrap gap-4 mt-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="websocket" value="1" id="ws_$id" $(checkbox "$websocket")><label class="form-check-label" for="ws_$id">WebSocket upgrade</label></div>
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="https_$id" $(checkbox "$force_https")><label class="form-check-label" for="https_$id">HTTP → HTTPS</label></div>
@@ -462,6 +484,7 @@ HTML
   cat <<HTML
 </div><div class="col-12"><label class="form-label">Route-specific excluded rule IDs</label><input class="form-control font-monospace" name="waf_disabled" placeholder="942100,941100"></div></div>
 </div>
+$(route_guard_fields "" 0 m "")
 <div class="d-flex flex-wrap gap-4 mt-3">
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="websocket" value="1" id="new_ws" checked><label class="form-check-label" for="new_ws">WebSocket upgrade</label></div>
 <div class="form-check form-switch"><input class="form-check-input" type="checkbox" name="force_https" value="1" id="new_https" checked><label class="form-check-label" for="new_https">HTTP → HTTPS</label></div>
@@ -1466,14 +1489,14 @@ handle_post() {
     /admin/route/add)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-add "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}" "${PARAM[allow_ips]:-}" "${PARAM[rate_count]:-0}" "${PARAM[rate_unit]:-m}" "${PARAM[max_body]:-}"
       redirect "/admin/site?host=$host"
       ;;
 
     /admin/route/save)
       host="${PARAM[host]:-}"
       plugins="$(collect_route_plugins)"
-      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}"
+      run_or_error /opt/liteedge/bin/sitectl.sh route-save "${PARAM[id]:-}" "$host" "${PARAM[match]:-prefix}" "${PARAM[path]:-/}" "${PARAM[target]:-}" "${PARAM[websocket]:-0}" "${PARAM[timeout]:-60}" "${PARAM[waf]:-0}" "${PARAM[force_https]:-0}" "${PARAM[waf_pl]:-1}" "$plugins" "${PARAM[waf_disabled]:-}" "${PARAM[backends]:-}" "${PARAM[lb_mode]:-round_robin}" "${PARAM[max_fails]:-3}" "${PARAM[fail_timeout]:-30}" "${PARAM[health_enabled]:-0}" "${PARAM[health_path]:-/health}" "${PARAM[health_expect]:-200}" "${PARAM[health_interval]:-30}" "${PARAM[health_timeout]:-5}" "${PARAM[health_fall]:-3}" "${PARAM[health_rise]:-2}" "${PARAM[health_cooldown]:-300}" "${PARAM[methods]:-ALL}" "${PARAM[rewrite_enabled]:-0}" "${PARAM[rewrite_pattern]:-}" "${PARAM[rewrite_replacement]:-}" "${PARAM[x_headers]:-}" "${PARAM[allow_ips]:-}" "${PARAM[rate_count]:-0}" "${PARAM[rate_unit]:-m}" "${PARAM[max_body]:-}"
       redirect "/admin/site?host=$host"
       ;;
 

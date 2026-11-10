@@ -66,4 +66,25 @@ sleep 1 # NGINX gracefully switches workers after a route reload.
 curl --noproxy '*' -sS -H 'Host: routes.test' "$PROXY/legacy/item" >"$TMP/result"
 jq -e '.path=="/legacy/item"' "$TMP/result" >/dev/null
 check 405 "$(curl --noproxy '*' -sS -X POST -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/legacy/item")" 'updated method restriction'
-echo 'PASS route features: proxy rewrite, method filtering, headers, JSON round-trip, validation, toggles'
+# Native NGINX route protections: invalid inputs, IP/CIDR allowlist, rate, body limit.
+ACTION=route/add
+check 400 "$(api --data-urlencode host=routes.test --data-urlencode path=/badcidr/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode 'allow_ips=192.0.2.1/33')" 'invalid CIDR'
+check 400 "$(api --data-urlencode host=routes.test --data-urlencode path=/badrate/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode 'rate_count=10;deny')" 'invalid rate'
+check 400 "$(api --data-urlencode host=routes.test --data-urlencode path=/badbody/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode 'max_body=1k;deny')" 'invalid body size'
+check 200 "$(api --data-urlencode host=routes.test --data-urlencode path=/blocked/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode waf=0 --data-urlencode force_https=0 --data-urlencode 'allow_ips=192.0.2.44/32,2001:db8::/32')" 'allowed CIDRs saved'
+sleep 1 # Allow reloaded NGINX workers to take over the new locations.
+check 403 "$(curl --noproxy '*' -sS -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/blocked/test")" 'unlisted source blocked'
+check 200 "$(api --data-urlencode host=routes.test --data-urlencode path=/rate/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode waf=0 --data-urlencode force_https=0 --data-urlencode rate_count=1 --data-urlencode rate_unit=s)" 'rate guard saved'
+sleep 1
+curl --noproxy '*' -sS -H 'Host: routes.test' -o /dev/null "$PROXY/rate/first" || true
+check 429 "$(curl --noproxy '*' -sS -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/rate/second")" 'request throttled'
+sleep 1
+check 200 "$(api --data-urlencode host=routes.test --data-urlencode path=/body/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode waf=0 --data-urlencode force_https=0 --data-urlencode max_body=1k)" 'body limit saved'
+sleep 1
+head -c 2048 /dev/zero > "$TMP/too-big"
+check 413 "$(curl --noproxy '*' -sS -X POST -H 'Host: routes.test' --data-binary @"$TMP/too-big" -o /dev/null -w '%{http_code}' "$PROXY/body/test")" 'oversized request blocked'
+curl --noproxy '*' -ksS -u admin:route-test "$ADMIN/api/v1/site?host=routes.test" >"$TMP/site"
+jq -e '[.site.routes[] | select(.path=="/blocked/")][0] | .allow_ips=="192.0.2.44/32,2001:db8::/32" and .rate_count=="0"' "$TMP/site" >/dev/null
+jq -e '[.site.routes[] | select(.path=="/body/")][0] | .max_body=="1k"' "$TMP/site" >/dev/null
+
+echo 'PASS route features: rewrite, methods, headers, IP/CIDR, rate limits, body caps, JSON and validation'

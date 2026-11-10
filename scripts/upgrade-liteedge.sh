@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# LiteEdge v3.1.5 in-place upgrade for Docker Compose or native Alpine/OpenRC.
+# LiteEdge v3.1.6 in-place upgrade for Docker Compose or native Alpine/OpenRC.
 # Stateful directories and administrator credentials are never replaced.
 set -Eeuo pipefail
 umask 077
 
-VERSION=v3.1.5
+VERSION=v3.1.6
 REPO="${LITEEDGE_REPO:-theonemule/docker-waf}"
 MODE=auto
 COMPOSE_DIR="$PWD"
@@ -18,7 +18,7 @@ OLD_VERSION=""
 
 usage() {
   cat <<'USAGE'
-LiteEdge v3.1.5 in-place upgrade
+LiteEdge v3.1.6 in-place upgrade
 Usage: upgrade-liteedge.sh [--mode auto|docker|alpine] [--compose-dir DIR]
                            [--repo OWNER/REPO] [--no-start]
 
@@ -28,7 +28,7 @@ Alpine mode (root): Replaces /opt/liteedge only after archive verification and
 staging; preserves /var/lib/liteedge and /etc/conf.d/liteedge. On failure, the
 previous executable tree is restored and the service is restarted if possible.
 
-Downloads only the pinned v3.1.5 release. No downgrades or new installs.
+Downloads only the pinned v3.1.6 release. No downgrades or new installs.
 USAGE
 }
 die() { echo "LiteEdge upgrade: $*" >&2; exit 1; }
@@ -153,7 +153,7 @@ upgrade_alpine() {
     die 'LiteEdge standalone runtime is not installed.'
   [[ -d /var/lib/liteedge && -s /etc/conf.d/liteedge ]] ||
     die 'Existing standalone persistent state/config not found.'
-  [[ "$(uname -m)" == x86_64 ]] || die 'v3.1.5 currently publishes x86_64 standalone binaries.'
+  [[ "$(uname -m)" == x86_64 ]] || die 'v3.1.6 currently publishes x86_64 standalone binaries.'
   OLD_VERSION="$(sed -n 's/^LiteEdge=//p' /opt/liteedge/VERSION | head -n1)"
   [[ -n "$OLD_VERSION" ]] || die 'Cannot read the installed LiteEdge version.'
   compare_versions "$OLD_VERSION"

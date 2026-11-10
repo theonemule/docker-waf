@@ -120,6 +120,56 @@ validate_timeout() {
   fi
 }
 
+# Blank list disables this policy. NGINX performs final address syntax checks.
+normalize_allow_ips() {
+  local raw="${1:-}" addr prefix part a b c d extra count=0 result=""
+  [[ ${#raw} -le 4096 ]] || die "IP allowlist is too long (maximum 4096 characters)."
+  raw="${raw//,/ }"
+  for addr in $raw; do
+    (( count += 1 ))
+    (( count <= 128 )) || die "IP allowlist cannot contain more than 128 entries."
+    part="${addr%%/*}"
+    if [[ "$addr" == */* ]]; then
+      prefix="${addr#*/}"
+      [[ "$prefix" =~ ^[0-9]{1,3}$ ]] || die "Invalid CIDR prefix: $addr"
+    else
+      prefix=""
+    fi
+    if [[ "$part" == *:* ]]; then
+      [[ "$part" =~ ^[0-9A-Fa-f:.]+$ ]] || die "Invalid IPv6 allowlist entry: $addr"
+      [[ -z "$prefix" ]] || (( 10#$prefix <= 128 )) || die "IPv6 CIDR must be /0-/128."
+    else
+      [[ "$part" =~ ^[0-9.]+$ ]] || die "Invalid IPv4 allowlist entry: $addr"
+      IFS=. read -r a b c d extra <<< "$part"
+      [[ -n "${a:-}" && -n "${b:-}" && -n "${c:-}" && -n "${d:-}" && -z "${extra:-}" ]] || die "Invalid IPv4 address: $addr"
+      for part in "$a" "$b" "$c" "$d"; do
+        if ! [[ "$part" =~ ^[0-9]{1,3}$ ]] || ! (( 10#$part <= 255 )); then
+          die "Invalid IPv4 address: $addr"
+        fi
+      done
+      [[ -z "$prefix" ]] || (( 10#$prefix <= 32 )) || die "IPv4 CIDR must be /0-/32."
+    fi
+    [[ -z "$result" ]] && result="$addr" || result+=",$addr"
+  done
+  printf '%s' "$result"
+}
+
+validate_route_rate() {
+  local count="${1:-0}" unit="${2:-m}"
+  [[ "$count" =~ ^(0|[1-9][0-9]{0,5})$ ]] || die "Rate limit must be 0 (off) or 1-999999 requests."
+  [[ "$unit" == s || "$unit" == m ]] || die "Rate limit interval must be seconds or minutes."
+}
+
+validate_route_body_size() {
+  local size="${1:-}"
+  [[ -z "$size" || "$size" =~ ^[1-9][0-9]{0,6}[kKmM]?$ ]] ||
+    die "Maximum request body size must be blank or a positive value such as 512k or 10m."
+}
+
+route_limit_zone() {
+  printf 'lr_%s' "$(printf '%s\n%s' "$1" "$2" | sha256sum | cut -c1-20)"
+}
+
 csv_contains() {
   local csv="${1:-}" wanted="${2:-}" item
   local -a items=()

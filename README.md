@@ -19,6 +19,14 @@ persistent configuration and certificates, excluding logs, or validates and
 restores that archive with automatic rollback on NGINX validation failure.
 See [full backup and restore](docs/full-backup-restore.md).
 
+Optional route-level traffic protection uses native NGINX controls: allowlists of
+IPv4/IPv6 addresses or CIDR blocks (403 for unlisted clients), per-route and
+per-connecting-IP request rates in requests/second or requests/minute (429 when
+exceeded), and configurable maximum request body size (413 on excess). All are
+opt-in. Empty body size inherits the site's `4m` NGINX setting; rate 0 disables
+limiting. Behind a trusted proxy, configure client-IP trust before enabling
+client-specific rules. Configure these controls under **Sites → Routes → Edit**.
+
 Recent changes are summarized in [CHANGELOG.md](CHANGELOG.md). For operating
 multi-backend sites and alerting on health checks, see
 [Site routing and health operations](docs/site-routing-and-health.md).
@@ -42,20 +50,20 @@ The management plane is intentionally small:
 - Flat-file persistent configuration
 - No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
-## Upgrade an existing installation to v3.1.5
+## Upgrade an existing installation to v3.1.6
 
-Release v3.1.5 provides a **single in-place upgrader** for Docker Compose
+Release v3.1.6 provides a **single in-place upgrader** for Docker Compose
 and native Alpine/OpenRC installs. It does not reset credentials, sites,
 certificates, WAF settings, observability configuration, or persistent logs.
-The upgrader is pinned to `v3.1.5`, verifies the Alpine archive's SHA-256,
+The upgrader is pinned to `v3.1.6`, verifies the Alpine archive's SHA-256,
 and attempts to restore the prior runtime/version on failed activation.
 
 Download the script and its checksum from the
-[LiteEdge v3.1.5 release](https://github.com/theonemule/docker-waf/releases/tag/v3.1.5):
+[LiteEdge v3.1.6 release](https://github.com/theonemule/docker-waf/releases/tag/v3.1.6):
 
 ```bash
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.5/upgrade-liteedge.sh
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.5/upgrade-liteedge.sh.sha256
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.6/upgrade-liteedge.sh
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.6/upgrade-liteedge.sh.sha256
 sha256sum -c upgrade-liteedge.sh.sha256
 chmod +x upgrade-liteedge.sh
 ```
@@ -67,7 +75,7 @@ specify its directory containing `docker-compose.yml`, `.env`, and `data/`:
 ./upgrade-liteedge.sh --mode docker --compose-dir /path/to/liteedge
 ```
 
-The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.1.5`,
+The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.1.6`,
 modifies only `LITEEDGE_VERSION` in the existing `.env`, re-creates
 the service via Compose, and verifies container health. Compose overrides,
 custom environment values, and `data/` remain unchanged. If activation fails,

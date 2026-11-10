@@ -171,7 +171,8 @@
     lb_mode:"round_robin",max_fails:"3",fail_timeout:"30",
     health_enabled:"0",health_path:"/health",health_expect:"200",health_interval:"30",
     health_timeout:"5",health_fall:"3",health_rise:"2",health_cooldown:"300",
-    methods:"ALL",rewrite_enabled:"0",rewrite_pattern:"",rewrite_replacement:"",x_headers:""};
+    methods:"ALL",rewrite_enabled:"0",rewrite_pattern:"",rewrite_replacement:"",x_headers:"",
+    allow_ips:"",rate_count:"0",rate_unit:"m",max_body:""};
   async function editRoute(route) {
     const r={...defaultRoute,...route};
     if(!cache.plugins.length){
@@ -213,6 +214,14 @@
         +field("Excluded WAF rule IDs","waf_disabled",r.waf_disabled)
         +(plugins?'<div class="mt-2"><strong>Application and CRS plugins</strong>'+plugins+'</div>':"")
         +'</fieldset>'
+        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Traffic protection (optional)</legend>'
+        +textarea("Allowed client IPv4 / IPv6 addresses or CIDR ranges","allow_ips",String(r.allow_ips||"").replaceAll(",",", "),3)
+        +'<p class="form-text">Blank permits all clients; otherwise unlisted IPs receive HTTP 403. Uses the connecting address; trusted proxy handling requires separate configuration.</p>'
+        +'<div class="spa-form-grid">'
+        +field("Requests (0 = disabled)","rate_count",r.rate_count||"0","number","min=0 max=999999")
+        +select("Per interval","rate_unit",[["s","Second"],["m","Minute"]],r.rate_unit||"m")
+        +field("Max request body (blank = site default 4m)","max_body",r.max_body||"","text",'placeholder="512k or 10m"')
+        +'</div><p class="form-text">Excess requests return 429; oversized bodies return 413. Rate limiting is per source IP and route.</p></fieldset>'
         +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Allowed HTTP methods</legend>'
         +'<div class="d-flex align-items-center gap-2 mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" data-operation="methods-all">Select All</button><span class="form-text">Unselected methods return HTTP 405.</span></div>'
         +'<div class="d-flex flex-wrap gap-3" data-route-methods>'
