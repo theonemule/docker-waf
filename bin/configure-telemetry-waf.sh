@@ -23,7 +23,7 @@ curl -fsS --connect-timeout 2 --max-time 5 "$BACKEND/" | grep -q '"service":"tel
 }
 
 upsert() {
-  local path="$1" methods="$2" body="$3"
+  local path="$1" methods="$2" body="$3" disabled="${4:-}"
   local existing='' file
   for file in "$(route_dir "$HOST")"/*.route; do
     [[ -f "$file" ]] || continue
@@ -34,12 +34,15 @@ upsert() {
   done
   local -a args=(
     "$HOST" prefix "$path" "$BACKEND"
-    0 30 1 1 1 '' ''
+    0 30 1 1 1 '' "$disabled"
     '' round_robin 3 30
     1 /healthz 200 30 5 3 2 300
     "$methods" 0 '' '' ''
     '' 0 m "$body"
   )
+  # Exclude ModSecurity rule 931120 ONLY on the Faro route; its normal
+  # browser performance attributes can contain URLs ending in ? (Cloudflare RUM).
+  # All other CRS rules remain active.
   # The WAF's 0-burst rate limiter was rejecting the POST immediately
   # after an OPTIONS preflight. Native collector enforces its own 120/min.
   if [[ -n "$existing" ]]; then
@@ -49,7 +52,7 @@ upsert() {
   fi
 }
 
-upsert /faro/paladin-chronicles/ POST,OPTIONS 256k
+upsert /faro/paladin-chronicles/ POST,OPTIONS 256k 931120
 upsert / GET 4k
 
 # Fail rather than silently claim completion if a route drifted.

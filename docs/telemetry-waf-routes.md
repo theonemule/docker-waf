@@ -8,7 +8,7 @@ There is **no sidecar, converter, separate Faro proxy or bridge**.
 
 | WAF route | Native upstream | Methods | WAF rules | Max body |
 | --- | --- | --- | --- | --- |
-| `/faro/paladin-chronicles/` | `http://10.0.1.183:4319` | POST, OPTIONS | ModSecurity enabled | 256k |
+| `/faro/paladin-chronicles/` | `http://10.0.1.183:4319` | POST, OPTIONS | ModSecurity enabled, Faro-only exception 931120 | 256k |
 | `/` | `http://10.0.1.183:4319` | GET | ModSecurity enabled | 4k |
 
 The upstream is Faro-only, so requests to private administration, query,
@@ -32,9 +32,9 @@ docker exec liteedge /opt/liteedge/bin/configure-telemetry-waf.sh
 
 The provisioning script validates that the backend identifies itself as
 `telemetry-lake` before making changes, and uses LiteEdge's transactional
-`sitectl.sh` to upsert only the two required routes. It does not
-configure or enable any MCP URL. A future tokenized read-only MCP
-endpoint is a separate feature and requires a separate security review.
+`sitectl.sh` to upsert only the two required routes. It does not modify the already-deployed /mcp/ route. That route forwards
+to 10.0.1.183:4320, uses HTTPS offload and requires the existing
+credential-redacting NGINX logging policy.
 
 ## Browser CORS
 
@@ -58,3 +58,13 @@ curl -i -X OPTIONS \
 Never revert the WAF upstream to the old `18084` bridge or
 `8080` compatibility proxy. Both have been retired. The live collector
 and WAF routes are `10.0.1.183:4319`.
+
+## Browser Faro false-positive resolved (November 12, 2026)
+
+LightEdge ModSecurity CRS rule 931120 incorrectly categorized an otherwise
+valid Faro resource-timing field containing a Cloudflare RUM URL ending with
+a question mark as remote-file-inclusion. The rule was excluded only for
+the /faro/paladin-chronicles/ route. All other CRS rules remain active.
+A replay of the exact previously rejected event returned HTTP 202 with
+Access-Control-Allow-Origin on both the LAN WAF and public Cloudflare edge.
+Future WAF provisioning must preserve the Faro-specific 931120 exception.

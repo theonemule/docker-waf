@@ -27,4 +27,5 @@ faro="$(emit_route_values telemetry.blaize.net prefix /faro/paladin-chronicles/ 
 ! grep -q 'liteedge_mcp_json' <<<"$faro"
 grep -Fq 'client_max_body_size 256k;' <<<"$faro"
 grep -Fq '(POST|OPTIONS)' <<<"$faro"
+grep -Fq 'upsert /faro/paladin-chronicles/ POST,OPTIONS 256k 931120' "$ROOT/bin/configure-telemetry-waf.sh"
 echo 'PASS telemetry WAF route privacy, rate limits, method/body controls'
