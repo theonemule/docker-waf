@@ -1,62 +1,60 @@
-# Production telemetry.blaize.net WAF routes
+# Live LightEdge routing for native Faro telemetry
 
-Once `10.0.1.183:8080/healthz` returns HTTP 200, add two *specific*
-prefix routes to the existing `telemetry.blaize.net` LightEdge site:
+**Production:** `telemetry.blaize.net` terminates public HTTPS at LightEdge,
+then forwards directly via private HTTP to the existing
+`telemetry-lake` Docker container on `10.0.1.183:4319`.
 
-| Route | Upstream | Methods | WAF | Rate | Max body |
-| --- | --- | --- | --- | --- | --- |
-| `/faro/paladin-chronicles/` | `http://10.0.1.183:8080` | POST, OPTIONS | CRS on (PL1) | 360/min/IP | 256k |
-| `/mcp/` | `http://10.0.1.183:8080` | POST | CRS off to avoid token-bearing audit logs; NGINX limits remain | 180/min/IP | 64k |
+There is **no sidecar, converter, separate Faro proxy or bridge**.
 
-The separate HTTP proxy enforces additional limits and only forwards
-the exact Faro source and MCP 64-character hexadecimal token routes.
-**Do not expose a `/` catch-all that forwards to the collector admin UI.**
-Keep the user-created site record, TLS certificate, unrelated routes and
-websites unchanged.
+| WAF route | Native upstream | Methods | WAF rules | Max body |
+| --- | --- | --- | --- | --- |
+| `/faro/paladin-chronicles/` | `http://10.0.1.183:4319` | POST, OPTIONS | ModSecurity enabled | 256k |
+| `/` | `http://10.0.1.183:4319` | GET | ModSecurity enabled | 4k |
 
-A reviewed provisioning script is installed into the updated LiteEdge
-container at `/opt/liteedge/bin/configure-telemetry-waf.sh`. On the WAF
-Docker host, **after the collector HTTP sidecars are deployed and the
-new LightEdge image with this change is running**, use:
+The upstream is Faro-only, so requests to private administration, query,
+bearer-authenticated ingestion and OTLP paths return 404 even if they reach
+the direct LAN port. Keep the site and TLS certificate unchanged.
+
+The initial WAF rate limiter (without burst) rejected a normal CORS
+`OPTIONS` followed immediately by `POST`. The two routes therefore
+use `RATE_COUNT=0` for now; the **native collector itself** enforces
+a 120-POST/minute/IP rate limit, a 256 KiB body limit, an exact public
+source and identifier, and a maximum of 1,000 records per request.
+
+## Reconciliation after upgrading LightEdge
+
+After verifying the existing `telemetry-lake` collector responds:
 
 ```sh
+curl -fsS http://10.0.1.183:4319/healthz
 docker exec liteedge /opt/liteedge/bin/configure-telemetry-waf.sh
 ```
 
-It requires the existing site, checks the HTTP backend and automatic
-MCP secret redaction, then upserts the two routes using LiteEdge's
-transactional `sitectl.sh` to validate/reload NGINX. It refuses to
-activate routes if either dependency is missing.
+The provisioning script validates that the backend identifies itself as
+`telemetry-lake` before making changes, and uses LiteEdge's transactional
+`sitectl.sh` to upsert only the two required routes. It does not
+configure or enable any MCP URL. A future tokenized read-only MCP
+endpoint is a separate feature and requires a separate security review.
 
-MCP paths carry private bearer credentials. The renderer automatically
-selects `liteedge_mcp_json` for the `prefix /mcp/` route. That
-existing NGINX log format preserves timing, method and response status
-but replaces URI with `/mcp` and route label with `[redacted]`.
-The MCP route also suppresses NGINX error URI logging. **Do not enable
-ModSecurity audit logging on the MCP route**, and inspect any upstream
-Cloudflare HTTP logs for full URL storage. Tokens must never be printed
-to the browser website bundle.
+## Browser CORS
 
-The Faro endpoint is browser-facing and must accept CORS preflight
-`OPTIONS` with exact origin `https://www.blaize.net` (and
-`https://blaize.net` if the apex is also served). Its endpoint name
-and public ID aren't credentials. The MCP endpoint is client-to-server
-and has no CORS requirement (all browser Origin headers are rejected).
+The native collector allows **only**:
+`https://blaize.net` and `https://www.blaize.net`.
 
-Smoke checks, **only after both components are deployed**:
+A valid preflight has an HTTP 204 response with the matching
+`Access-Control-Allow-Origin` and explicit methods and headers.
+A valid Faro `POST` returns 202. Invalid origins are rejected with 403,
+wrong public identifiers return 404, and administrative endpoints on
+this public hostname remain unavailable.
 
 ```sh
-curl -i -X OPTIONS https://telemetry.blaize.net/faro/paladin-chronicles/PUBLIC_ID \
- -H 'Origin: https://www.blaize.net' \
- -H 'Access-Control-Request-Method: POST' \
- -H 'Access-Control-Request-Headers: content-type'
-curl -s -o /dev/null -w '%{http_code}\n' https://telemetry.blaize.net/v1/admin/endpoints
+curl -i -X OPTIONS \
+  https://telemetry.blaize.net/faro/paladin-chronicles/PUBLIC_ID \
+  -H 'Origin: https://www.blaize.net' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: content-type'
 ```
 
-Expected: Faro preflight 204 with correct
-`Access-Control-Allow-Origin`; admin 404. The MCP sidecar's guarded
-deployment script tests tokenized JSON-RPC initialization without
-printing the private token.
-
-This script does **not** bypass the remote SSH/deployment gap. A local
-source change or passing test is not evidence of a production route.
+Never revert the WAF upstream to the old `18084` bridge or
+`8080` compatibility proxy. Both have been retired. The live collector
+and WAF routes are `10.0.1.183:4319`.
