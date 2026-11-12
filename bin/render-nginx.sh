@@ -157,6 +157,13 @@ emit_route_values() {
 
   id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
   printf '    %s {\n' "$location"
+  # MCP token URLs are bearer credentials. Never write the URL or the
+  # route label into ordinary WAF access logs. The predeclared sanitized
+  # format retains status, method and timing without the token.
+  if [[ "$match" == prefix && "$path" == /mcp/ ]]; then
+    echo '        access_log /data/logs/events.jsonl liteedge_mcp_json;'
+    echo '        error_log /dev/null crit;'
+  fi
   printf '        set $liteedge_route "%s";\n' "$match:$path"
   if [[ -n "$allow_ips" ]]; then
     local -a addresses=()
