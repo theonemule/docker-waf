@@ -37,7 +37,8 @@ jobs:
   verify:
     needs: first-friday
     if: needs.first-friday.outputs.enabled == 'true'
-    runs-on: ubuntu-24.04
+    # Use the physical CI163 runner only once registration is fully enabled.
+    runs-on: ${{ vars.CI163_READY == 'true' && 'ci163-waf' || 'ubuntu-24.04' }}
     timeout-minutes: 240
     env:
       BUILD_JOBS: '2'
@@ -50,8 +51,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y shellcheck jq xorriso
+          if [[ "$RUNNER_ENVIRONMENT" == 'self-hosted' ]]; then
+            for tool in shellcheck jq xorriso docker; do
+              command -v "$tool" >/dev/null || { echo "Missing runner tool: $tool" >&2; exit 1; }
+            done
+          else
+            sudo apt-get update
+            sudo apt-get install -y shellcheck jq xorriso
+          fi
 
       - name: Validate source, unit, contracts, frontend and upgrade paths
         shell: bash
