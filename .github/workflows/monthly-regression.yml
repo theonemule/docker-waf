@@ -7,7 +7,7 @@ on:
       - '.github/workflows/monthly-regression.yml'
   schedule:
     # GitHub schedules use UTC; run on Fridays and gate to first Friday below.
-    - cron: '41 15 * * 5'
+    - cron: '15 5 * * 5'
   workflow_dispatch:
 
 permissions:
