@@ -1,0 +1,161 @@
+name: Monthly LiteEdge v3 appliance regression
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - '.github/workflows/monthly-regression.yml'
+  schedule:
+    # GitHub schedules use UTC; run on Fridays and gate to first Friday below.
+    - cron: '41 15 * * 5'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: liteedge-v3-monthly-verification
+  cancel-in-progress: false
+
+jobs:
+  first-friday:
+    runs-on: ubuntu-24.04
+    outputs:
+      enabled: ${{ steps.guard.outputs.enabled }}
+    steps:
+      - name: Require the first Friday (manual and workflow changes are allowed)
+        id: guard
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != schedule || $(date -u +%d) -le 7 ]]; then
+            echo enabled=true >> "$GITHUB_OUTPUT"
+          else
+            echo enabled=false >> "$GITHUB_OUTPUT"
+            echo 'Skipped: this is not the first Friday.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  verify:
+    needs: first-friday
+    if: needs.first-friday.outputs.enabled == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      BUILD_JOBS: '2'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install validation tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck jq xorriso
+
+      - name: Validate source, unit, contracts, frontend and upgrade paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          for f in install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh; do bash -n "$f"; done
+          shellcheck -x install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh
+          ADMIN_PASSWORD=monthly-ci-test docker compose config >/dev/null
+          bash tests/test-deployment.sh
+          bash tests/test-observability.sh
+          bash tests/test-otlp.sh
+          bash tests/test-upgrade.sh
+          bash tests/test-upgrade-alpine.sh
+          bash tests/test-lb-health.sh
+          bash tests/test-alert-selectors.sh
+          bash tests/test-log-selectors.sh
+          bash tests/test-native-nginx-migration.sh
+          bash tests/test-acme-crs-integration.sh
+          bash tests/test-admin-password.sh
+          bash tests/test-vm-iso.sh
+          python3 tests/test-iso-admin-setup.py
+          node tests/test-backend-pool-ui.js
+          node tests/test-spa-static.js
+          node tests/test-spa-exporter.js
+          node tests/test-spa-log-filters.js
+          node tests/test-spa-dropdown-dismiss.js
+          node tests/test-ui-import.js
+          node tests/test-logs-ui.js
+          python3 tests/test-http-api-coverage.py
+
+      - name: Build pinned Alpine NGINX + ModSecurity + CRS appliance payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="3.0.0-ci.$GITHUB_RUN_NUMBER"
+          ./scripts/build-release.sh "$version"
+          (cd dist && sha256sum -c liteedge-linux-musl-x86_64.tar.gz.sha256)
+          tar -tzf dist/liteedge-linux-musl-x86_64.tar.gz | grep -Fxq opt/liteedge/entrypoint.sh
+
+      - name: Build and verify both bootable appliance ISOs
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="3.0.0-ci.$GITHUB_RUN_NUMBER"
+          ./scripts/build-vm-iso.sh "$version"
+          ./scripts/build-baremetal-iso.sh "$version"
+          (cd dist && sha256sum -c "liteedge-vm-installer-$version-x86_64.iso.sha256")
+          (cd dist && sha256sum -c "liteedge-baremetal-installer-$version-x86_64.iso.sha256")
+          test -s "dist/liteedge-vm-installer-$version-x86_64.iso"
+          test -s "dist/liteedge-baremetal-installer-$version-x86_64.iso"
+
+      - name: Build the current LiteEdge v3 Docker runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker build --pull --build-arg LITEEDGE_ARCH=x86_64 \
+            --tag liteedge-v3:monthly-ci .
+          docker image inspect liteedge-v3:monthly-ci >/dev/null
+
+      - name: Exercise management API, real proxy routes, safeguards, UI and restore
+        shell: bash
+        run: |
+          set -euo pipefail
+          image=liteedge-v3:monthly-ci
+          bash tests/test-http-api-regression.sh "$image"
+          bash tests/test-spa-api.sh "$image"
+          bash tests/test-route-enhancements.sh "$image"
+          bash tests/test-full-backup.sh "$image"
+
+      - name: Export verified Docker image and generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker save liteedge-v3:monthly-ci | gzip -1 > dist/liteedge-v3-docker-x86_64.tar.gz
+          (cd dist && sha256sum liteedge-v3-docker-x86_64.tar.gz > docker-SHA256SUMS)
+          (cd dist && sha256sum -c docker-SHA256SUMS)
+
+      - name: Upload verified binaries, VM ISO, bare-metal ISO and Docker image
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: liteedge-v3-monthly-build
+          path: |
+            dist/liteedge-linux-musl-x86_64.tar.gz
+            dist/liteedge-linux-musl-x86_64.tar.gz.sha256
+            dist/liteedge-vm-installer-*-x86_64.iso
+            dist/liteedge-vm-installer-*-x86_64.iso.sha256
+            dist/liteedge-baremetal-installer-*-x86_64.iso
+            dist/liteedge-baremetal-installer-*-x86_64.iso.sha256
+            dist/liteedge-v3-docker-x86_64.tar.gz
+            dist/docker-SHA256SUMS
+          if-no-files-found: warn
+          retention-days: 30
+          compression-level: 0
+
+      - name: Record scope and non-deployment policy
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo '## Monthly LiteEdge v3 acceptance'
+            echo 'Build source binaries, both appliance ISO formats, and the Docker'
+            echo 'image; run existing unit, contracts and end-to-end management'
+            echo 'API, reverse proxy, route protections, and backup/restore tests.'
+            echo 'Artifacts are private to this workflow run; this workflow does'
+            echo 'not publish a release, push a registry tag or deploy to any host.'
+          } >> "$GITHUB_STEP_SUMMARY"
