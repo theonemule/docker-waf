@@ -89,7 +89,7 @@ jobs:
           version="3.0.0-ci.$GITHUB_RUN_NUMBER"
           ./scripts/build-release.sh "$version"
           (cd dist && sha256sum -c liteedge-linux-musl-x86_64.tar.gz.sha256)
-          tar -tzf dist/liteedge-linux-musl-x86_64.tar.gz | grep -Fxq opt/liteedge/entrypoint.sh
+          tar -tzf dist/liteedge-linux-musl-x86_64.tar.gz | grep -Fx opt/liteedge/entrypoint.sh
 
       - name: Build and verify both bootable appliance ISOs
         shell: bash
