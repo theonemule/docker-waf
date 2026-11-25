@@ -16,11 +16,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.26.10'
-          cache-dependency-path: controller/go.sum
-      - run: go test -mod=readonly ./... && go vet -mod=readonly ./...
+          cache: false
+      - run: go test -count=1 -mod=readonly ./... && go vet -mod=readonly ./...
         working-directory: controller
       - run: python3 tests/test-provider.py && python3 tests/test-ha-config.py && python3 tests/test-nginx-generation.py
-      - run: docker build -t lightedge-controller:checks-${{ github.run_id }} controller
+      - run: docker build --no-cache --pull -t lightedge-controller:checks-${{ github.run_id }} controller
       - uses: azure/setup-helm@v4
         with:
           version: v3.19.0

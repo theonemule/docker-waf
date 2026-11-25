@@ -20,7 +20,7 @@ fi
 
 mkdir -p "$ROOT/dist"
 rm -f "$ROOT/dist/liteedge-linux-musl-"*.tar.gz "$ROOT/dist/liteedge-linux-musl-"*.sha256
-"${DOCKER[@]}" run --rm \
+"${DOCKER[@]}" run --rm --pull always \
   -e VERSION="$VERSION" \
   -e BUILD_JOBS="$BUILD_JOBS" \
   -v "$ROOT:/src" \

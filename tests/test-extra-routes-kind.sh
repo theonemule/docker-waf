@@ -22,7 +22,7 @@ COPY --from=build /grpc /grpc
 USER 10001:10001
 ENTRYPOINT ["/grpc"]
 DOCKER
-docker build --pull=false -t "$grpc_image" "$tmp/grpc"
+docker build --no-cache --pull -t "$grpc_image" "$tmp/grpc"
 kind create cluster --name "$name" --kubeconfig "$KUBECONFIG" --wait 120s
 kind load docker-image --name "$name" "$edge_image" "$controller_image" "$grpc_image"
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.0/experimental-install.yaml

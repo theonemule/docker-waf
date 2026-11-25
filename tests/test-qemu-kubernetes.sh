@@ -33,8 +33,8 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 bash tests/qemu/fetch-inputs.sh "$cache"
-docker build -t lightedge-qemu-harness:dev tests/qemu
-docker build -t "$fixture_image" tests/qemu/fixture
+docker build --no-cache --pull -t lightedge-qemu-harness:dev tests/qemu
+docker build --no-cache --pull -t "$fixture_image" tests/qemu/fixture
 docker image inspect "$edge" "$controller" "$fixture_image" --format '{{.Id}} {{.RepoTags}}' >"$out/image-ids.txt"
 docker save "$edge" "$controller" "$fixture_image" -o "$tmp/lightedge-images.tar"
 device=()

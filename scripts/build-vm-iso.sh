@@ -13,7 +13,7 @@ command -v docker >/dev/null 2>&1 || { echo 'Docker is required.' >&2; exit 1; }
 mkdir -p "$ROOT/dist"
 # Alpine is pinned by image manifest digest. The aports branch is pinned to
 # the v3.22 release line; the ISO only uses official Alpine APK repositories.
-docker run --rm \
+docker run --rm --pull always \
   -e VERSION="$VERSION" \
   -e LITEEDGE_ISO_VARIANT="$ISO_VARIANT" \
   -e LITEEDGE_ISO_SOURCE=/src \
