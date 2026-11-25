@@ -14,8 +14,26 @@ cleanup(){
    kubectl -n lightedge-system logs statefulset/test-lightedge-appliance --tail=40 || true
    kubectl -n lightedge-system logs deploy/test-lightedge --tail=40 || true
  fi
- kind delete cluster --name "$name" || true
- rm -rf "$tmp"
+ local cleanup_rc=0
+ kind delete cluster --name "$name" || cleanup_rc=$?
+ # The disposable hostPath is owned by the appliance UID (10001).
+ # After the cluster stops, restore access to this fixture only. Do not
+ # change the real HA storage permissions or require sudo on CI163.
+ if [[ "$cleanup_rc" == 0 && -d "$tmp/shared" ]]; then
+   docker run --rm --network none --user 0:0 \
+     --mount "type=bind,source=$tmp/shared,target=/fixture" \
+     --entrypoint /bin/sh "$edge_image" -ec \
+     'chown -R "$1:$2" /fixture; chmod -R u+rwX /fixture' sh "$(id -u)" "$(id -g)" || cleanup_rc=$?
+ fi
+ if [[ "$cleanup_rc" == 0 ]]; then
+   rm -rf "$tmp" || cleanup_rc=$?
+ fi
+ if [[ "$cleanup_rc" != 0 ]]; then
+   echo "HA test cleanup failed; retained fixture: $tmp" >&2
+ fi
+ # Preserve the actual test failure, or report a genuine cleanup failure.
+ if [[ "$rc" != 0 ]]; then exit "$rc"; fi
+ exit "$cleanup_rc"
 }
 trap cleanup EXIT
 if [[ "${HA_MULTINODE:-0}" == 1 ]];then
