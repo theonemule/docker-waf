@@ -16,6 +16,7 @@ helm_path="$(command -v helm)"
 name="lightedge-qemu-$(openssl rand -hex 5)"
 tmp="$(mktemp -d)"
 container_created=0
+network_created=0
 fixture_image="lightedge-qemu-fixture:${name##*-}"
 cleanup(){
  rc=$?;set +e
@@ -24,10 +25,12 @@ cleanup(){
    docker logs "$name" >"$out/runner.log" 2>&1 || true
    docker rm -fv "$name" >/dev/null 2>&1||true
  fi
+ if [[ $network_created == 1 ]];then docker network rm "$name" >/dev/null || { echo "Failed to remove test network $name" >&2; if [[ $rc == 0 ]];then rc=1;fi; };fi
  docker image rm "$fixture_image" >/dev/null 2>&1 || true
  rm -rf "$tmp"
  printf '%s\n' "$rc" >"$out/host-result.exit"
  echo "Evidence: $out"
+ exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -39,7 +42,11 @@ docker image inspect "$edge" "$controller" "$fixture_image" --format '{{.Id}} {{
 docker save "$edge" "$controller" "$fixture_image" -o "$tmp/lightedge-images.tar"
 device=()
 if docker run --rm --device /dev/kvm --entrypoint sh lightedge-qemu-harness:dev -c "test -r /dev/kvm && test -w /dev/kvm" >/dev/null 2>&1;then device=(--device /dev/kvm);fi
-docker create --name "$name" "${device[@]}" --shm-size=64m \
+# Separate L2 segment: the persistent manual lab uses the default bridge and
+# the same guest IPs. Never let its multicast frames reach these test VMs.
+docker network create --driver bridge "$name" >/dev/null
+network_created=1
+docker create --name "$name" --network "$name" "${device[@]}" --shm-size=64m \
   -e "EDGE_IMAGE=$edge" -e "CONTROLLER_IMAGE=$controller" -e "FIXTURE_IMAGE=$fixture_image" -e "QEMU_WORKER_MEM_MB=${QEMU_WORKER_MEM_MB:-1536}" -e "QEMU_CONTROL_MEM_MB=${QEMU_CONTROL_MEM_MB:-2048}" \
   --entrypoint bash lightedge-qemu-harness:dev /lab/input/run.sh >/dev/null
 container_created=1

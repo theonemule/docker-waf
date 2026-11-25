@@ -50,6 +50,10 @@ if [[ -c /dev/kvm && -r /dev/kvm && -w /dev/kvm ]];then accel=kvm;cpu=host;fi
 worker_mem=${QEMU_WORKER_MEM_MB:-1536};control_mem=${QEMU_CONTROL_MEM_MB:-2048}
 [[ "$worker_mem" =~ ^[0-9]+$ && "$control_mem" =~ ^[0-9]+$ ]]
 ((worker_mem>=1024 && worker_mem<=4096 && control_mem>=1536 && control_mem<=4096))
+# Unique multicast bus even if another harness is running on the host.
+bus_id="$(openssl rand -hex 4)"
+mcast="239.192.$((16#${bus_id:0:2})).$((16#${bus_id:2:2})):$((20000+16#${bus_id:4:4}%30000))"
+echo "QEMU isolated guest LAN: $mcast"
 echo "QEMU accelerator=$accel; control plane $control_mem MiB; workers $worker_mem MiB each; 1 vCPU per node"
 for n in 1 2 3;do
  name=le-node$n
@@ -104,7 +108,7 @@ YAML
    -drive "file=/lab/private/$name/disk.qcow2,if=virtio,format=qcow2" \
    -drive "file=/lab/private/$name/seed.iso,media=cdrom,readonly=on" \
    -netdev "user,id=nat,$forwards" -device "virtio-net-pci,netdev=nat,mac=52:54:00:77:00:0$n" \
-   -netdev "socket,id=lan,mcast=230.77.77.77:17777" -device "virtio-net-pci,netdev=lan,mac=52:54:00:77:01:0$n" \
+   -netdev "socket,id=lan,mcast=$mcast" -device "virtio-net-pci,netdev=lan,mac=52:54:00:77:01:0$n" \
    -no-reboot >"evidence/$name.qemu.log" 2>&1 &
  pids+=("$!")
 done
@@ -130,10 +134,20 @@ for n in 1 2 3;do printf '%s' "$token" | remote "$n" 'umask 077; mkdir -p /etc/r
 remote 1 'nohup k3s server --token-file /etc/rancher/k3s/token --node-ip 192.168.77.11 --advertise-address 192.168.77.11 --tls-san 127.0.0.1 --flannel-iface eth1 --cluster-cidr 10.42.0.0/16 --service-cidr 10.43.0.0/16 --disable traefik --disable servicelb --disable metrics-server --disable-network-policy --node-taint node-role.kubernetes.io/control-plane=true:NoSchedule >/var/log/k3s.log 2>&1 </dev/null &'
 for i in $(seq 1 180);do if remote 1 'test -s /etc/rancher/k3s/k3s.yaml' 2>/dev/null;then break;fi;[[ $i -lt 180 ]];sleep 2;done
 remote 1 'cat /etc/rancher/k3s/k3s.yaml' | sed 's/127.0.0.1:6443/127.0.0.1:26443/' >"$KUBECONFIG"
+# Verify the workers reach the correct control-plane endpoint before join.
+for n in 2 3;do
+  for i in $(seq 1 60);do
+    if remote "$n" 'curl -ksSf --connect-timeout 2 --max-time 3 https://192.168.77.11:6443/cacerts >/dev/null' 2>/dev/null;then
+      echo "Worker $n reached K3s CA endpoint";break
+    fi
+    if [[ $i == 60 ]];then echo "Worker $n cannot reach K3s CA endpoint" >&2;exit 1;fi
+    sleep 2
+  done
+done
 for n in 2 3;do remote "$n" "nohup k3s agent --server https://192.168.77.11:6443 --token-file /etc/rancher/k3s/token --node-ip 192.168.77.$((10+n)) --flannel-iface eth1 >/var/log/k3s.log 2>&1 </dev/null &";done
 for i in $(seq 1 180);do
  if [[ "$(k get nodes -o json 2>/dev/null | jq -r '[.items[]|select(any(.status.conditions[];.type=="Ready" and .status=="True"))]|length' || true)" == 3 ]];then break;fi
- [[ $i -lt 180 ]];sleep 3
+ if [[ $i == 180 ]];then echo "Timed out waiting for three Ready Kubernetes nodes" >&2;k get nodes -o wide || true;exit 1;fi;sleep 3
 done
 k get nodes -o wide
 echo 'PASS three independent QEMU guest kernels joined the Kubernetes cluster'
