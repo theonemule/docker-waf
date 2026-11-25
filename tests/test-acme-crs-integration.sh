@@ -16,12 +16,13 @@ site_file() { printf '%s/%s.site' "$SITE_DIR" "$1"; }
 cert_dir() { printf '%s/%s' "$CERT_DIR" "$1"; }
 validate_host() { [[ "$1" =~ ^[A-Za-z0-9.-]+$ ]]; }
 validate_aliases() { :; }
+assert_manual_site() { :; }
 COMMON
 printf 'HOST=one.example\nALIASES=\n' > "$TMP/data/sites/one.example.site"
 printf 'HOST=two.example\nALIASES=\n' > "$TMP/data/sites/two.example.site"
-sed 's@source /opt/liteedge/bin/common.sh@source "$ACME_TEST_COMMON"@' "$ROOT/bin/certctl.sh" > "$TMP/testbin/certctl.sh"
+sed 's@source /opt/liteedge/bin/common.sh@source "$ACME_TEST_COMMON"@; s@/opt/liteedge/bin/configlock.py@"$ACME_TEST_LOCK"@' "$ROOT/bin/certctl.sh" > "$TMP/testbin/certctl.sh"
 chmod +x "$TMP/testbin/certctl.sh"
-export DATA_DIR="$TMP/data" ACME_TEST_COMMON="$TMP/common.sh"
+export DATA_DIR="$TMP/data" ACME_TEST_COMMON="$TMP/common.sh" ACME_TEST_LOCK="$ROOT/bin/configlock.py"
 "$TMP/testbin/certctl.sh" set-email one.example one@example.org
 "$TMP/testbin/certctl.sh" set-email two.example two@example.net
 [[ "$(cat "$TMP/data/certs/one.example/acme-email")" == one@example.org ]]
