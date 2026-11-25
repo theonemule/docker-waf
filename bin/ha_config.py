@@ -134,6 +134,9 @@ def capture(data, dest):
             if src.is_symlink():
                 raise HAError("Certificate directory must not be a symlink")
             (dest/part).mkdir(mode=0o700)
+            # Kubernetes fsGroup can inherit setgid from the local volume.
+            # The synthetic certificate root is always canonical mode 0700.
+            (dest/part).chmod(0o700)
             for item in sorted(src.iterdir()):
                 if item.name!="_admin":
                     copy_path(item,dest/part/item.name)

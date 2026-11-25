@@ -54,13 +54,13 @@ assert_code() {
   local wanted="$1" actual="$2" label="$3"
   [[ "$actual" == "$wanted" ]] || {
     echo "FAIL $label expected $wanted got $actual" >&2
-    head -c 500 "$RESP" >&2
+    tail -35 "$RESP" >&2
     exit 1
   }
   count=$((count+1))
 }
 assert_body() {
-  grep -Fq -- "$1" "$RESP" || { echo "FAIL missing body text $1" >&2; head -c 500 "$RESP" >&2; exit 1; }
+  grep -Fq -- "$1" "$RESP" || { echo "FAIL missing body text $1" >&2; tail -35 "$RESP" >&2; exit 1; }
   count=$((count+1))
 }
 must_redirect() {
@@ -208,6 +208,9 @@ route_id="$(docker exec "$NAME" sh -c 'for f in /data/sites/example.test.routes/
 [[ "$route_id" =~ ^[a-f0-9]{16}$ ]]
 must_redirect /admin/route/save -d "id=$route_id" -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:23456' -d 'timeout=70'
 docker exec "$NAME" sh -c 'grep -Rl "^TARGET=http://127.0.0.1:23456$" /data/sites/example.test.routes/*.route >/dev/null'
+# The route identity includes its upstream. Read the new identity after editing.
+route_id="$(docker exec "$NAME" sh -c 'for f in /data/sites/example.test.routes/*.route; do if grep -qx "PATH=/api/" "$f" && grep -qx "TARGET=http://127.0.0.1:23456" "$f"; then basename "$f" .route; fi; done')"
+[[ "$route_id" =~ ^[a-f0-9]{16}$ ]]
 # Pool endpoints are rendered as equal, removable URL rows in both add and
 # edit dialogs, regardless of the legacy TARGET/BACKENDS storage distinction.
 must_redirect /admin/route/save -d "id=$route_id" -d 'host=example.test' -d 'match=prefix' -d 'path=/api/' -d 'target=http://127.0.0.1:23456' -d 'backends=http://127.0.0.1:23457,http://127.0.0.1:23458' -d 'timeout=70'

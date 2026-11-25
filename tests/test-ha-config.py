@@ -64,6 +64,15 @@ class SharedTest(unittest.TestCase):
         self.assertEqual(a.local()["revision"],2)
         self.assertEqual((self.a/"sites/test.site").read_text(),"HOST=updated.example.test\n")
 
+    def test_fs_group_inherited_setgid_does_not_change_capture(self):
+        a=self.bootstrap()
+        self.b.chmod(0o2770)
+        b=self.node("b"); b.startup()
+        self.assertTrue(b.local_matches())
+        b.begin_write()
+        self.assertFalse(b.publish())
+        self.assertEqual(b.local()["revision"],1)
+
     def test_wrong_key_unknown_member_and_signature(self):
         a=self.bootstrap()
         (self.shared/"key").write_text("cd"*32)
