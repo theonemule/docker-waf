@@ -49,8 +49,9 @@ api_site_json() {
   for route in "$(route_dir "$host")"/*.route; do
     routes="$(jq -cn --argjson arr "$routes" --argjson element "$(api_route_json "$route")" '$arr+[$element]')"
   done
-  local tls_status='{}' listener certdir="$(cert_dir "$host")" listener_dir
-  local keys="$(kv_get "$file" GW_LISTENERS)"
+  local tls_status='{}' listener certdir listener_dir keys
+  certdir="$(cert_dir "$host")"
+  keys="$(kv_get "$file" GW_LISTENERS)"
   if [[ -z "$keys" ]];then
     keys="$(jq -r '(["https"]+ [.[]|.features.schemes[]|select(startswith("https:"))]|unique)|join(",")' <<< "$routes")"
   fi

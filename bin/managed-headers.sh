@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Managed request-header transformations. The provider validates all literals.
 managed_header_var() {
   printf 'liteedge_hdr_%s' "$(printf '%s/%s/%s' "$1" "$2" "$3" | sha256sum | cut -c1-24)"

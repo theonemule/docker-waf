@@ -285,7 +285,8 @@ emit_route_values() {
     fi
     [[ "$waf" != 1 ]] || emit_location_waf "$host" "$id" "$waf_pl" "$waf_plugins" "$waf_disabled"
     if jq -e '.path!=null' <<< "$redirect_json" >/dev/null; then
-      local redirect_var="le_path_$(printf '%s/%s' "$host" "$id" | sha256sum | cut -c1-24)"
+      local redirect_var
+      redirect_var="le_path_$(printf '%s/%s' "$host" "$id" | sha256sum | cut -c1-24)"
       printf '        if ($%s = "") { return 400; }\n' "$redirect_var"
       redirect_path="\$$redirect_var\$is_args\$args"
     fi
@@ -501,7 +502,7 @@ emit_route() {
     if [[ -z "$MANAGED_DEADLINE_CONFIG" ]] && jq -e '.retry.attempts>0' <<< "$retry_features" >/dev/null;then
       local retry_targets
       retry_targets="$(pool_urls "$route")"
-      [[ -n "$(kv_get "$route" BACKENDS)" ]] && ! grep -Eq "^(invalid|unavailable)$" <<< "$retry_targets" || die 'Retries require multiple valid HTTP backends.'
+      if [[ -z "$(kv_get "$route" BACKENDS)" ]] || grep -Eq "^(invalid|unavailable)$" <<< "$retry_targets"; then die 'Retries require multiple valid HTTP backends.'; fi
       [[ "$(sort -u <<< "$retry_targets"|wc -l)" == "$(wc -l <<< "$retry_targets")" ]] || die 'Retry backends must be distinct.'
     fi
     MANAGED_RETRY_B64="$(jq -r 'if .retry==null then "" else .retry|@base64 end' <<< "$retry_features")"

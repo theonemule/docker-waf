@@ -109,7 +109,7 @@ pool_render_upstreams() {
         elif [[ "$invalid_pool" == 1 && "$value" == unavailable ]];then POOL_AUTHORITY="unix:${LITEEDGE_RUN_DIR:-/tmp/liteedge-run}/unavailable-backend.sock"
         else pool_url_parts "$value"; fi
         weight="${weight_items[$index]:-1}"
-        [[ "$weight" =~ ^[1-9][0-9]{0,6}$ ]] && (( weight <= 1000000 )) || die 'Invalid backend weight.'
+        if ! [[ "$weight" =~ ^[1-9][0-9]{0,6}$ ]] || (( weight > 1000000 )); then die 'Invalid backend weight.'; fi
         if [[ -n "$weights" ]]; then
           printf '    server %s weight=%s max_fails=%s fail_timeout=%ss;\n' "$POOL_AUTHORITY" "$weight" "$fails" "$timeout" >> "$out"
         else
