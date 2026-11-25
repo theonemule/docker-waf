@@ -1,0 +1,25 @@
+controller:
+  enableIngress: true
+  enableGateway: true
+  enableGRPC: true
+  enablePolicies: true
+  extraHTTPPorts: [8081]
+  extraHTTPSPorts: [8443]
+  extraTCPPorts: [9000]
+  extraUDPPorts: [9001]
+  extraTLSPorts: [9444]
+appliance:
+  enabled: true
+  serviceType: NodePort
+  extraHTTPPorts: [{port: 8081, targetPort: 18081}]
+  extraHTTPSPorts: [{port: 8443, targetPort: 18443}]
+  extraTCPPorts: [{port: 9000, targetPort: 19000}]
+  extraUDPPorts: [{port: 9001, targetPort: 19001}]
+  extraTLSPorts: [{port: 9444, targetPort: 19444}]
+  ha:
+    enabled: true
+    replicas: 2
+    requireDistinctNodes: true
+    existingClaim: lightedge-shared-ha
+    keySecret: lightedge-ha-key
+    bootstrap: true

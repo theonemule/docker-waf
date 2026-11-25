@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# LiteEdge v3.1.6 in-place upgrade for Docker Compose or native Alpine/OpenRC.
+# LiteEdge v3.3.0 in-place upgrade for Docker Compose or native Alpine/OpenRC.
 # Stateful directories and administrator credentials are never replaced.
 set -Eeuo pipefail
 umask 077
 
-VERSION=v3.1.6
+VERSION=v3.3.0
 REPO="${LITEEDGE_REPO:-theonemule/docker-waf}"
 MODE=auto
 COMPOSE_DIR="$PWD"
@@ -15,10 +15,13 @@ OLD_RUNNING=0
 BACKUP=""
 INIT_BACKUP=""
 OLD_VERSION=""
+STATE_BACKUP=""
+OLD_IMAGE=""
+OLD_CID=""
 
 usage() {
   cat <<'USAGE'
-LiteEdge v3.1.6 in-place upgrade
+LiteEdge v3.3.0 in-place upgrade
 Usage: upgrade-liteedge.sh [--mode auto|docker|alpine] [--compose-dir DIR]
                            [--repo OWNER/REPO] [--no-start]
 
@@ -28,7 +31,8 @@ Alpine mode (root): Replaces /opt/liteedge only after archive verification and
 staging; preserves /var/lib/liteedge and /etc/conf.d/liteedge. On failure, the
 previous executable tree is restored and the service is restarted if possible.
 
-Downloads only the pinned v3.1.6 release. No downgrades or new installs.
+Downloads only the pinned release. No downgrades or new installs.
+Configuration is backed up before activation; logs remain in place.
 USAGE
 }
 die() { echo "LiteEdge upgrade: $*" >&2; exit 1; }
@@ -43,6 +47,7 @@ while (($#)); do
     *) die "Unknown option: $1" ;;
   esac
 done
+[[ "$VERSION" =~ ^v3\.[0-9]+\.[0-9]+$ ]] || die "Upgrade requires a stable published release, not $VERSION."
 [[ "$MODE" == auto || "$MODE" == alpine || "$MODE" == docker ]] || die 'Invalid mode.'
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'Invalid repository.'
 command -v sha256sum >/dev/null 2>&1 || die 'sha256sum is required.'
@@ -51,7 +56,7 @@ command -v mktemp >/dev/null 2>&1 || die 'mktemp is required.'
 # Releases have immutable version tags; never pull "latest" as an upgrade.
 compare_versions() {
   local old="$1"
-  [[ "$old" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 0
+  [[ "$old" =~ ^v?3\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || die "Unknown or unsupported installed version: $old."
   [[ "v${old#v}" != "$VERSION" ]] || die "Already at $VERSION."
   local first
   first="$(printf '%s\n' "${old#v}" "${VERSION#v}" | sort -V | head -n1)"
@@ -64,8 +69,20 @@ cleanup() {
     notice 'Upgrade failed; attempting rollback.'
     if [[ "$MODE" == docker ]]; then
       if [[ -n "$TMP" && -f "$TMP/original.env" ]]; then
+        (cd "$COMPOSE_DIR" && docker compose stop liteedge) || { notice "Cannot stop candidate; backup retained at $TMP"; exit "$code"; }
         cp -p "$TMP/original.env" "$COMPOSE_DIR/.env"
-        (cd "$COMPOSE_DIR" && docker compose up -d) || echo 'Rollback restart failed; inspect Docker Compose.' >&2
+        # Refuse to restore via a changed mutable tag, rather than start the wrong runtime.
+        local previous_tag
+        previous_tag="$(sed -n 's/^LITEEDGE_VERSION=//p' "$TMP/original.env" | tail -n1)"
+        if [[ "$(docker image inspect -f '{{.Id}}' "ghcr.io/$REPO:$previous_tag" 2>/dev/null)" != "$OLD_IMAGE" ]]; then
+          notice "Previous tag no longer identifies the installed image; backup retained at $TMP. Restore the previous image locally before retrying."
+          exit "$code"
+        fi
+        if [[ -s "$STATE_BACKUP" ]]; then
+          (cd "$COMPOSE_DIR" && docker compose run --rm --no-deps -T --pull never --entrypoint bash liteedge -ec 'cd /data; find . -mindepth 1 -maxdepth 1 ! -name logs ! -name run -exec rm -rf -- {} +; tar -xf -' < "$STATE_BACKUP") ||
+            { notice "State restore failed; backup retained at $TMP"; exit "$code"; }
+        fi
+        (cd "$COMPOSE_DIR" && docker compose up -d --no-deps --pull never liteedge) || { notice "Rollback restart failed; backup retained at $TMP"; exit "$code"; }
       fi
     elif [[ "$MODE" == alpine ]]; then
       if command -v rc-service >/dev/null 2>&1; then
@@ -77,6 +94,10 @@ cleanup() {
         if [[ -n "$INIT_BACKUP" && -f "$INIT_BACKUP" ]]; then
           cp -p "$INIT_BACKUP" /etc/init.d/liteedge
         fi
+      fi
+      if [[ -s "$STATE_BACKUP" ]]; then
+        (cd /var/lib/liteedge && find . -mindepth 1 -maxdepth 1 ! -name logs ! -name run -exec rm -rf -- {} + && tar -xf "$STATE_BACKUP") ||
+          { notice "State restore failed; backup retained at $TMP"; exit "$code"; }
       fi
       if [[ "$OLD_RUNNING" == 1 ]]; then
         rc-service liteedge start || echo 'Rollback service restart failed; inspect OpenRC.' >&2
@@ -115,24 +136,39 @@ upgrade_docker() {
   [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die 'Invalid repository in .env.'
   old_tag="$(sed -n 's/^LITEEDGE_VERSION=//p' "$COMPOSE_DIR/.env" | tail -n1)"
   [[ -n "$old_tag" ]] || die 'Existing .env must specify LITEEDGE_VERSION.'
-  compare_versions "$old_tag"
+  OLD_CID="$(cd "$COMPOSE_DIR" && docker compose ps -aq liteedge)"
+  [[ -n "$OLD_CID" ]] || die 'Existing LiteEdge container is required to identify the installed runtime.'
+  OLD_IMAGE="$(docker inspect -f '{{.Image}}' "$OLD_CID")"
+  OLD_VERSION="$(docker run --rm --entrypoint cat "$OLD_IMAGE" /opt/liteedge/VERSION | sed -n 's/^LiteEdge=//p' | head -n1)"
+  compare_versions "$OLD_VERSION"
+  [[ "$old_tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ ]] || die 'Invalid existing image tag.'
+  [[ "$(docker image inspect -f '{{.Id}}' "ghcr.io/$REPO:$old_tag" 2>/dev/null)" == "$OLD_IMAGE" ]] ||
+    die 'Existing image tag does not identify the installed runtime; pin its current image before upgrading.'
   (cd "$COMPOSE_DIR" && docker compose config -q) || die 'Existing Compose file fails validation.'
   TMP="$(mktemp -d "$COMPOSE_DIR/.liteedge-upgrade.XXXXXXXX")"
   cp -p "$COMPOSE_DIR/.env" "$TMP/original.env"
   image="ghcr.io/$REPO:$VERSION"
   notice "Downloading $image before modifying the running service."
   docker pull "$image" || die 'Could not pull the pinned release image.'
+  (cd "$COMPOSE_DIR" && docker compose stop liteedge) || die 'Could not stop existing service.'
+  STATE_BACKUP="$TMP/configuration.tar"
+  if ! (cd "$COMPOSE_DIR" && docker compose run --rm --no-deps -T --pull never --entrypoint tar liteedge -C /data --exclude=./logs --exclude=./run -cf - . > "$STATE_BACKUP") || ! tar -tf "$STATE_BACKUP" >/dev/null; then
+    (cd "$COMPOSE_DIR" && docker compose up -d --no-deps --pull never liteedge) || true
+    die 'Could not back up persistent configuration.'
+  fi
   ROLLBACK=1
   # Edit only the version key. All other credentials and configuration remain.
   sed -i "s/^LITEEDGE_VERSION=.*/LITEEDGE_VERSION=$VERSION/" "$COMPOSE_DIR/.env"
-  (cd "$COMPOSE_DIR" && docker compose config -q && docker compose up -d) ||
+  (cd "$COMPOSE_DIR" && docker compose config -q && docker compose up -d --no-deps --pull never liteedge) ||
     die 'Docker Compose activation failed.'
   cid="$(cd "$COMPOSE_DIR" && docker compose ps -q liteedge)"
   [[ -n "$cid" ]] || die 'Cannot find the LiteEdge container after upgrade.'
+  [[ "$(docker inspect -f '{{.Image}}' "$cid")" == "$(docker image inspect -f '{{.Id}}' "$image")" ]] ||
+    die 'Compose did not activate the requested release image.'
   for ((attempt=0; attempt<45; attempt++)); do
     state="$(docker inspect -f '{{.State.Running}}' "$cid" 2>/dev/null || true)"
     health="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$cid" 2>/dev/null || true)"
-    if [[ "$state" == true && ( "$health" == healthy || "$health" == none ) ]]; then
+    if [[ "$state" == true && "$health" == healthy ]]; then
       ROLLBACK=0
       notice "$VERSION active in Docker. Existing .env, Compose, and ./data preserved."
       return
@@ -149,11 +185,12 @@ upgrade_alpine() {
   command -v curl >/dev/null 2>&1 || die 'curl is required.'
   command -v rc-service >/dev/null 2>&1 || die 'OpenRC is required.'
   command -v setcap >/dev/null 2>&1 || die 'setcap (libcap) is required.'
+  command -v python3 >/dev/null 2>&1 || die 'python3 is required; install the runtime dependencies before upgrading.'
   [[ -d /opt/liteedge && -s /opt/liteedge/VERSION && -f /etc/init.d/liteedge ]] ||
     die 'LiteEdge standalone runtime is not installed.'
   [[ -d /var/lib/liteedge && -s /etc/conf.d/liteedge ]] ||
     die 'Existing standalone persistent state/config not found.'
-  [[ "$(uname -m)" == x86_64 ]] || die 'v3.1.6 currently publishes x86_64 standalone binaries.'
+  [[ "$(uname -m)" == x86_64 ]] || die 'v3.3.0 currently publishes x86_64 standalone binaries.'
   OLD_VERSION="$(sed -n 's/^LiteEdge=//p' /opt/liteedge/VERSION | head -n1)"
   [[ -n "$OLD_VERSION" ]] || die 'Cannot read the installed LiteEdge version.'
   compare_versions "$OLD_VERSION"
@@ -178,9 +215,15 @@ upgrade_alpine() {
   LD_LIBRARY_PATH="$base/opt/liteedge/lib" "$base/opt/liteedge/sbin/nginx" -V 2>&1 |
     grep -q 'ModSecurity-nginx' || die 'Release NGINX has no ModSecurity connector.'
   if rc-service liteedge status >/dev/null 2>&1; then OLD_RUNNING=1; fi
+  [[ "$START" == 1 || "$OLD_RUNNING" == 0 ]] || die "Stop the service before using --no-start."
   INIT_BACKUP="$TMP/previous-openrc"
   cp -p /etc/init.d/liteedge "$INIT_BACKUP"
   [[ "$OLD_RUNNING" == 0 ]] || rc-service liteedge stop || die 'Could not stop existing LiteEdge service.'
+  STATE_BACKUP="$TMP/configuration.tar"
+  if ! tar -C /var/lib/liteedge --exclude=./logs --exclude=./run -cf "$STATE_BACKUP" .; then
+    [[ "$OLD_RUNNING" == 0 ]] || rc-service liteedge start || true
+    die 'Could not back up persistent configuration.'
+  fi
   BACKUP="$TMP/previous"
   ROLLBACK=1
   mv /opt/liteedge "$BACKUP"

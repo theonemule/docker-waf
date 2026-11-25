@@ -13,6 +13,17 @@ for match in re.findall(r'(?m)^    (/admin/[^)\n]+)\)',post):
 assert expected, 'Failed to parse backend POST cases'
 matrix=test[test.index('routes=('):test.index('\nfor pair in "${routes[@]}"')]
 covered=set(re.findall(r"'(/admin/[^:']+):[A-Za-z0-9_.-]+'",matrix))
+# The newer HTTPS-only JSON actions are exercised by dedicated live
+# integration tests, rather than by the legacy CGI postback matrix.
+provider=(root/'tests/test-provider-integration.sh').read_text()
+assert '/api/v1/actions/provider/$action' in provider
+covered.update('/admin/provider/'+action for action in
+               re.findall(r'(?m)^admin_action (save|rotate|delete)\b',provider))
+transport=(root/'tests/test-stream-routes.sh').read_text()
+assert '/api/v1/actions/stream/save' in transport
+assert 'test "$(api "$routes")" = 200' in transport
+assert "test \"$(api '[]')\" = 200" in transport
+covered.add('/admin/stream/save')
 missing=expected-covered
 extra=covered-expected
 assert not missing, f'POST paths missing from HTTP API regression: {sorted(missing)}'

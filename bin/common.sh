@@ -8,6 +8,11 @@ DATA_DIR="${DATA_DIR:-/data}"
 SITE_DIR="$DATA_DIR/sites"
 CERT_DIR="$DATA_DIR/certs"
 ACME_DIR="$DATA_DIR/acme"
+if [[ -n "${LITEEDGE_HA_DIR:-}" ]]; then
+  # Mutable ACME accounts and HTTP-01 challenges are shared by the group.
+  # Installed certificates are still published in signed source revisions.
+  ACME_DIR="$LITEEDGE_HA_DIR/acme"
+fi
 NGINX_DIR="$DATA_DIR/nginx"
 NGINX_SITE_DIR="${NGINX_SITE_DIR:-$NGINX_DIR/sites}"
 NGINX_BASELINE_DIR="${NGINX_BASELINE_DIR:-$NGINX_DIR/baselines}"
@@ -59,6 +64,23 @@ bool_value() {
   case "${1:-}" in 1|on|true|yes) echo 1 ;; *) echo 0 ;; esac
 }
 
+assert_manual_site() {
+  local host="$1" file
+  file="$(site_file "$host")"
+  [[ -z "$(kv_get "$file" PROVIDER)" ]] || die "Site is managed by a Kubernetes provider."
+  local candidate record owned aliases="${2:-}"
+  for record in "$SITE_DIR"/*.site; do
+    [[ -f "$record" ]] || continue
+    [[ -n "$(kv_get "$record" PROVIDER)" ]] || continue
+    owned="$(kv_get "$record" HOST)"
+    for candidate in "$host" ${aliases//,/ }; do
+      [[ "${candidate,,}" != "${owned,,}" ]] || die "Hostname is managed by a Kubernetes provider."
+      if [[ "$owned" == '*' || ( "$owned" == \*.* && "${candidate,,}" == *"${owned:1}" ) ]]; then
+        die "Hostname overlaps a Kubernetes provider scope."
+      fi
+    done
+  done
+}
 validate_host() {
   [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] ||
     die "Invalid host: $1"
@@ -106,6 +128,7 @@ validate_route_match() {
 validate_route_path() {
   local value="$1"
   [[ "$value" == /* ]] || die "Route must begin with /."
+  [[ "$value" != /.liteedge-internal/mirror/* ]] || die "Reserved internal route path."
   [[ "$value" != *$'\n'* && "$value" != *$'\r'* && "$value" != *[[:space:]]* && "$value" != *'{'* && "$value" != *'}'* && "$value" != *';'* && "$value" != *'"'* && "$value" != *"'"* ]] ||
     die "Unsafe route pattern."
 }
@@ -285,7 +308,7 @@ installed_plugin_rows() {
 }
 
 reload_nginx() {
-  "$NGINX_BIN" -s reload -c "$NGINX_CONF"
+  python3 /opt/liteedge/bin/nginx_reload.py "$NGINX_BIN" "$NGINX_CONF"
 }
 
 # Route feature validation. Never interpolate unchecked values into NGINX directives.

@@ -2,3 +2,6 @@
 data/*
 !data/.gitkeep
 dist/
+
+.kube/
+__pycache__/

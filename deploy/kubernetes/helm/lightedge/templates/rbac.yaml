@@ -1,0 +1,82 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "lightedge.name" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ printf "%s-%s" .Release.Namespace (include "lightedge.name" .) | trunc 63 | trimSuffix "-" }}
+rules:
+  - apiGroups: [""]
+    resources: [services, secrets, namespaces]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+{{- if .Values.controller.enableIngress }}
+  - apiGroups: [networking.k8s.io]
+    resources: [ingressclasses, ingresses]
+    verbs: [get, list]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses/status]
+    verbs: [update]
+{{- end }}
+{{- if .Values.controller.enableGateway }}
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [get]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses, gateways, httproutes, grpcroutes, tcproutes, udproutes, tlsroutes, referencegrants, backendtlspolicies]
+    verbs: [get, list]
+  - apiGroups: [gateway.networking.k8s.io]
+    resources: [gatewayclasses/status, gateways/status, httproutes/status, grpcroutes/status, tcproutes/status, udproutes/status, tlsroutes/status, backendtlspolicies/status]
+    verbs: [update]
+{{- end }}
+{{- if .Values.controller.enablePolicies }}
+  - apiGroups: [lightedge.blaize.net]
+    resources: [lightedgepolicies]
+    verbs: [get, list]
+  - apiGroups: [lightedge.blaize.net]
+    resources: [lightedgepolicies/status]
+    verbs: [update]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ printf "%s-%s" .Release.Namespace (include "lightedge.name" .) | trunc 63 | trimSuffix "-" }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ printf "%s-%s" .Release.Namespace (include "lightedge.name" .) | trunc 63 | trimSuffix "-" }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lightedge.name" . }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "lightedge.name" . }}-lease
+rules:
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [create]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    resourceNames: [{{ include "lightedge.name" . | quote }}]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "lightedge.name" . }}-lease
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "lightedge.name" . }}-lease
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lightedge.name" . }}
+    namespace: {{ .Release.Namespace }}

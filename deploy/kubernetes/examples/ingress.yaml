@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    lightedge.blaize.net/waf-paranoia-level: "2"
+spec:
+  ingressClassName: lightedge
+  rules:
+    - host: web.apps.example.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: web
+                port:
+                  number: 8080

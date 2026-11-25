@@ -19,7 +19,7 @@ concurrency:
 
 jobs:
   first-friday:
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     outputs:
       enabled: ${{ steps.guard.outputs.enabled }}
     steps:
@@ -37,8 +37,7 @@ jobs:
   verify:
     needs: first-friday
     if: needs.first-friday.outputs.enabled == 'true'
-    # Use the physical CI163 runner only once registration is fully enabled.
-    runs-on: ${{ vars.CI163_READY == 'true' && 'ci163-waf' || 'ubuntu-24.04' }}
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     timeout-minutes: 240
     env:
       BUILD_JOBS: '2'
@@ -51,14 +50,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if [[ "$RUNNER_ENVIRONMENT" == 'self-hosted' ]]; then
-            for tool in shellcheck jq xorriso docker; do
-              command -v "$tool" >/dev/null || { echo "Missing runner tool: $tool" >&2; exit 1; }
-            done
-          else
-            sudo apt-get update
-            sudo apt-get install -y shellcheck jq xorriso
-          fi
+          for tool in jq docker node python3 curl; do command -v "$tool"; done
+          docker compose version
+          mkdir -p "$RUNNER_TEMP/lightedge-tools"
+          curl -fsSL --retry 3 https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP/lightedge-tools" --strip-components=1 shellcheck-v0.10.0/shellcheck
+          echo "$RUNNER_TEMP/lightedge-tools" >> "$GITHUB_PATH"
 
       - name: Validate source, unit, contracts, frontend and upgrade paths
         shell: bash
@@ -93,7 +89,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="3.0.0-ci.$GITHUB_RUN_NUMBER"
+          source build/release.env
+          version="$LITEEDGE_RELEASE-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           ./scripts/build-release.sh "$version"
           (cd dist && sha256sum -c liteedge-linux-musl-x86_64.tar.gz.sha256)
           tar -tzf dist/liteedge-linux-musl-x86_64.tar.gz | grep -Fx opt/liteedge/entrypoint.sh
@@ -102,7 +99,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="3.0.0-ci.$GITHUB_RUN_NUMBER"
+          source build/release.env
+          version="$LITEEDGE_RELEASE-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           ./scripts/build-vm-iso.sh "$version"
           ./scripts/build-baremetal-iso.sh "$version"
           (cd dist && sha256sum -c "liteedge-vm-installer-$version-x86_64.iso.sha256")

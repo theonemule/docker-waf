@@ -1,0 +1,117 @@
+{{- if and (or .Values.provider.targetsSecret .Values.provider.partitionsSecret) .Values.appliance.enabled }}
+{{- fail "targetsSecret/partitionsSecret cannot be combined with embedded appliance provisioning" }}
+{{- end }}
+{{- if and .Values.provider.targetsSecret .Values.provider.partitionsSecret }}
+{{- fail "targetsSecret and partitionsSecret are mutually exclusive" }}
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "lightedge.name" . }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  # Control plane may briefly stop during upgrade; the appliance retains its
+  # last-known-good routing. Avoid a single-replica leader lease rollout deadlock.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lightedge-controller
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lightedge-controller
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    spec:
+      serviceAccountName: {{ include "lightedge.name" . }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: controller
+          image: {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - {{ printf "--enable-grpc=%t" .Values.controller.enableGRPC | quote }}
+            {{- if .Values.provider.partitionsSecret }}
+            - --partitions-file=/credentials/partitions.json
+            {{- else if .Values.provider.targetsSecret }}
+            - --targets-file=/credentials/targets.json
+            {{- else }}
+            - {{ printf "--provider-url=%s" (include "lightedge.providerURL" .) | quote }}
+            - {{ printf "--provider-id=%s" .Values.provider.id | quote }}
+            - --token-file=/credentials/token
+            - --ca-file=/credentials/ca.crt
+            {{- end }}
+            - {{ printf "--controller-name=%s" .Values.controller.name | quote }}
+            - {{ printf "--ingress-class=%s" .Values.controller.ingressClass | quote }}
+            - {{ printf "--gateway-class=%s" .Values.controller.gatewayClass | quote }}
+            - {{ printf "--enable-ingress=%t" .Values.controller.enableIngress | quote }}
+            - {{ printf "--ingress-wildcard=%t" .Values.controller.ingressWildcard | quote }}
+            - {{ printf "--ingress-catch-all=%t" .Values.controller.ingressCatchAll | quote }}
+            - {{ printf "--enable-gateway=%t" .Values.controller.enableGateway | quote }}
+            - {{ printf "--gateway-client-validated-frontend=%t" .Values.controller.gatewayClientValidatedFrontend | quote }}
+            - {{ printf "--gateway-catch-all-https=%t" .Values.controller.gatewayCatchAllHTTPS | quote }}
+            - {{ printf "--enable-policies=%t" .Values.controller.enablePolicies | quote }}
+            - {{ printf "--backend-mode=%s" .Values.controller.backendMode | quote }}
+            - {{ printf "--node-address=%s" .Values.controller.nodeAddress | quote }}
+            {{- if not .Values.provider.partitionsSecret }}
+            - {{ printf "--extra-http-ports=%s" (join "," .Values.controller.extraHTTPPorts) | quote }}
+            - {{ printf "--extra-https-ports=%s" (join "," .Values.controller.extraHTTPSPorts) | quote }}
+            - {{ printf "--extra-tcp-ports=%s" (join "," .Values.controller.extraTCPPorts) | quote }}
+            - {{ printf "--extra-udp-ports=%s" (join "," .Values.controller.extraUDPPorts) | quote }}
+            - {{ printf "--extra-tls-ports=%s" (join "," .Values.controller.extraTLSPorts) | quote }}
+            - {{ printf "--addresses=%s" (join "," .Values.controller.addresses) | quote }}
+            {{- end }}
+            - {{ printf "--interval=%s" .Values.controller.interval | quote }}
+            - {{ printf "--lease-namespace=%s" .Release.Namespace | quote }}
+            - {{ printf "--lease-name=%s" (include "lightedge.name" .) | quote }}
+            - --identity=$(POD_NAME)
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: "1", memory: 256Mi}
+          volumeMounts:
+            - name: credentials
+              mountPath: /credentials
+              readOnly: true
+      volumes:
+        - name: credentials
+          secret:
+            {{- if .Values.provider.partitionsSecret }}
+            secretName: {{ .Values.provider.partitionsSecret | quote }}
+            defaultMode: 0440
+            {{- else if .Values.provider.targetsSecret }}
+            secretName: {{ .Values.provider.targetsSecret | quote }}
+            defaultMode: 0440
+            {{- else }}
+            secretName: {{ required "provider.credentialsSecret is required" .Values.provider.credentialsSecret }}
+            defaultMode: 0440
+            items:
+              - {key: token, path: token}
+              - {key: ca.crt, path: ca.crt}
+            {{- end }}

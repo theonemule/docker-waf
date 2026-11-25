@@ -1,0 +1,15 @@
+apiVersion: lightedge.blaize.net/v1alpha1
+kind: LightEdgePolicy
+metadata:
+  name: web
+spec:
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: HTTPRoute
+    name: web
+  waf:
+    enabled: true
+    paranoiaLevel: 2
+  rateLimit:
+    requestsPerSecond: 100
+  maxBodySize: 20m

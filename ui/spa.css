@@ -19,3 +19,14 @@
 .spa-log-option:hover, .spa-log-option:focus-within { background:var(--bs-tertiary-bg); }
 .spa-log-option[hidden] { display:none; }
 .spa-log-option input { flex:0 0 auto; margin-top:0; }
+
+.spa-backend-row .spa-backend-weight { flex:0 0 6rem;min-width:0; }
+/* Focused route setup. Hidden controls retain their draft values until save. */
+[data-route-step][hidden], [data-site-panel][hidden], .spa-route-option[hidden], [data-route-editor] [hidden] {display:none !important;}
+.spa-route-progress {display:flex;flex-wrap:wrap;gap:.5rem;}
+.spa-route-progress span {flex:1;min-width:6rem;border-top:3px solid var(--bs-border-color);padding-top:.5rem;color:var(--bs-secondary-color);font-size:.85rem;}
+.spa-route-progress span.active {border-color:var(--bs-primary);color:var(--bs-body-color);font-weight:600;}
+.spa-route-option > summary {cursor:pointer;font-weight:600;}
+.spa-route-option[open] > summary {margin-bottom:.75rem;}
+.spa-review {display:grid;grid-template-columns:minmax(6rem,1fr) 3fr;gap:.5rem;}
+.spa-review dd {overflow-wrap:anywhere;margin:0;}

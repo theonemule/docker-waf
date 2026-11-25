@@ -2,6 +2,10 @@ ARG ALPINE_VERSION=3.22
 ARG ALPINE_DIGEST=sha256:5291449c3df73caf6ed85e649dec1b9e818b39a5d8c871e97afc13e9cd5e8fa8
 
 ARG ALPINE_REGISTRY=docker.io/library/alpine
+FROM golang:1.26.10-bookworm AS deadline-builder
+COPY runtime/deadline/ /src/deadline/
+RUN cd /src/deadline && go test main.go main_test.go && go vet main.go main_test.go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline-proxy main.go
+
 FROM ${ALPINE_REGISTRY}:${ALPINE_VERSION}@${ALPINE_DIGEST}
 
 ARG LITEEDGE_ARCH=x86_64
@@ -11,10 +15,11 @@ RUN apk add --no-cache python3 bash ca-certificates curl openssl tzdata fcgiwrap
 COPY dist/liteedge-linux-musl-${LITEEDGE_ARCH}.tar.gz /tmp/liteedge.tar.gz
 COPY dist/liteedge-linux-musl-${LITEEDGE_ARCH}.tar.gz.sha256 /tmp/liteedge.tar.gz.sha256
 
-RUN set -eux; cd /tmp; sed -i 's#liteedge-linux-musl-[^ ]*\.tar\.gz#liteedge.tar.gz#' liteedge.tar.gz.sha256; sha256sum -c liteedge.tar.gz.sha256; tar -C / -xzf liteedge.tar.gz; rm -f liteedge.tar.gz liteedge.tar.gz.sha256; test -x /opt/liteedge/sbin/nginx; test -x /opt/liteedge/entrypoint.sh; LD_LIBRARY_PATH=/opt/liteedge/lib /opt/liteedge/sbin/nginx -V 2>&1 | grep -q 'ModSecurity-nginx'
+RUN set -eux; cd /tmp; sed -i 's#liteedge-linux-musl-[^ ]*\.tar\.gz#liteedge.tar.gz#' liteedge.tar.gz.sha256; sha256sum -c liteedge.tar.gz.sha256; tar -C / -xzf liteedge.tar.gz; rm -f liteedge.tar.gz liteedge.tar.gz.sha256; test -x /opt/liteedge/sbin/nginx; test -x /opt/liteedge/entrypoint.sh; LD_LIBRARY_PATH=/opt/liteedge/lib /opt/liteedge/sbin/nginx -V 2>&1 | grep -q 'ModSecurity-nginx'; grep -aq 'modsecurity_rules_file_shared' /opt/liteedge/sbin/nginx
 
 # Source overlays let locally built images use the current checked-out runtime
 # alongside the verified prebuilt NGINX/ModSecurity binary release.
+COPY --from=deadline-builder /deadline-proxy /opt/liteedge/bin/deadline-proxy
 COPY bin/ /opt/liteedge/bin/
 COPY cgi/ /opt/liteedge/cgi/
 COPY ui/ /opt/liteedge/ui/

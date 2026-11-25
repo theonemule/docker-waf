@@ -20,7 +20,7 @@ const root={innerHTML:"",querySelector(selector){
   assert.equal(selector,'form[data-api-action="collector/save"]');
   return form;
 }};
-const context={root,
+const context={root,cache:{},escape:value=>String(value??""),textarea:(label,name,value="")=>'<textarea name="'+name+'">'+value+'</textarea>',
   card:(title,body)=>'<section><h3>'+title+'</h3>'+body+'</section>',
   form:(name,body)=>'<form data-api-action="'+name+'">'+body+'</form>',
   field:(label,name,value="",type="text",extra="")=>'<input name="'+name+'" value="'+value+'" type="'+type+'" '+extra+'>',
@@ -28,7 +28,7 @@ const context={root,
   rowActions:()=>""};
 vm.createContext(context);
 vm.runInContext(source.slice(start,end),context,{filename:"ui/spa.js"});
-context.renderServer({settings:{},collector:{mode:"otlp",url:"http://otel.internal:4318/v1/logs",service_name:"liteedge.proxy"}});
+context.renderServer({settings:{},collector:{mode:"otlp",url:"http://otel.internal:4318/v1/logs",service_name:"liteedge.proxy"}},{unavailable:true},{unavailable:true});
 assert.match(root.innerHTML,/OpenTelemetry \(OTLP\/HTTP JSON\)/);
 assert.match(root.innerHTML,/value="http:\/\/otel.internal:4318\/v1\/logs"/);
 assert.match(root.innerHTML,/name="service_name" value="liteedge.proxy"/);

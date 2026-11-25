@@ -1,10 +1,8 @@
-name: Build and publish Docker WAF v3
+name: Build and qualify LightEdge and Kubernetes controller
 
 on:
-  pull_request:
-    branches: [master]
   push:
-    branches: [master]
+    branches: [master, "feature/**"]
     tags:
       - "v3.*"
   workflow_dispatch:
@@ -12,17 +10,38 @@ on:
 permissions:
   contents: read
 
+# The repository-specific runner shares a physical dev host with the manual lab.
+# Only trusted repository pushes and explicit dispatches execute on it.
+concurrency:
+  group: lightedge-build
+  cancel-in-progress: false
+
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/docker-waf
+  CONTROLLER_IMAGE: ghcr.io/${{ github.repository_owner }}/lightedge-controller
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
-      - name: Install validation tools
-        run: sudo apt-get update && sudo apt-get install -y shellcheck jq
+      - name: Check runner prerequisites
+        run: |
+          set -euo pipefail
+          for tool in docker jq node python3 curl; do command -v "$tool"; done
+          docker compose version
+          docker info --format '{{.Name}}'
+          python3 -c 'import yaml'
+      - name: Install ShellCheck in runner temporary directory
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/lightedge-tools"
+          curl -fsSL --retry 3 https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP/lightedge-tools" --strip-components=1 shellcheck-v0.10.0/shellcheck
+          echo "$RUNNER_TEMP/lightedge-tools" >> "$GITHUB_PATH"
 
       - name: Validate source
         shell: bash
@@ -54,35 +73,46 @@ jobs:
           node tests/test-backend-pool-ui.js
           node tests/test-spa-static.js
           node tests/test-spa-exporter.js
+          node tests/test-spa-route-parity.js
           node tests/test-spa-log-filters.js
           node tests/test-spa-dropdown-dismiss.js
           node tests/test-ui-import.js
           node tests/test-logs-ui.js
+          python3 tests/test-site-read.py
           python3 tests/test-http-api-coverage.py
+          python3 tests/test-provider.py
+          python3 tests/test-ha-config.py
+          python3 tests/test-nginx-generation.py
 
   build-appliance:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     timeout-minutes: 120
     outputs:
       version: ${{ steps.version.outputs.version }}
+      controller_version: ${{ steps.version.outputs.controller_version }}
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Select artifact version
         id: version
         shell: bash
         run: |
           set -euo pipefail
+          source build/release.env
+          version="$LITEEDGE_RELEASE"
+          controller_version="$CONTROLLER_RELEASE"
           if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
-            version="${GITHUB_REF_NAME#v}"
-          elif [[ "$GITHUB_REF" == refs/heads/master && "${{ contains(github.event.head_commit.message, '[publish-release v3.1.6]') }}" == true ]]; then
-            version="3.1.6"
+            [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "Tag must match build/release.env"; exit 1; }
           else
-            version="3.0.0-ci.${GITHUB_RUN_NUMBER}"
+            version="$version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
+            controller_version="$controller_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "controller_version=$controller_version" >> "$GITHUB_OUTPUT"
 
       - name: Build standalone appliance payload
         shell: bash
@@ -90,7 +120,7 @@ jobs:
           set -euo pipefail
           BUILD_JOBS=2 ./scripts/build-release.sh "${{ steps.version.outputs.version }}"
           cp scripts/install-alpine.sh dist/install-alpine.sh
-          cp scripts/upgrade-liteedge.sh dist/upgrade-liteedge.sh
+          sed "s/^VERSION=v[0-9][0-9.]*/VERSION=v${{ steps.version.outputs.version }}/" scripts/upgrade-liteedge.sh > dist/upgrade-liteedge.sh
           chmod +x dist/upgrade-liteedge.sh
           # Bind the published installer to the exact release's Compose asset.
           sed "s/__LITEEDGE_RELEASE_TAG__/v${{ steps.version.outputs.version }}/g" install.sh > dist/install-docker.sh
@@ -119,10 +149,12 @@ jobs:
 
   build-iso:
     needs: build-appliance
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Download freshly built standalone binaries
         uses: actions/download-artifact@v4
@@ -166,13 +198,15 @@ jobs:
 
   build-container:
     needs: build-appliance
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
+    timeout-minutes: 180
     permissions:
       contents: read
-      packages: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Download standalone appliance payload
         uses: actions/download-artifact@v4
@@ -209,6 +243,16 @@ jobs:
           echo "Container did not become healthy." >&2
           exit 1
 
+      - name: Migrate real previous release state
+        shell: bash
+        run: |
+          set -euo pipefail
+          for previous in v3.1.5 v3.1.6; do
+            docker pull "ghcr.io/theonemule/docker-waf:$previous"
+            bash tests/test-release-state-upgrade.sh "${IMAGE_NAME}:ci" "ghcr.io/theonemule/docker-waf:$previous"
+          done
+          bash tests/test-upgrade-compose-live.sh "${IMAGE_NAME}:ci" ghcr.io/theonemule/docker-waf:v3.1.6
+
       - name: End-to-end management API regressions in an isolated container
         shell: bash
         run: |
@@ -216,42 +260,165 @@ jobs:
           bash tests/test-http-api-regression.sh "${IMAGE_NAME}:ci"
           bash tests/test-spa-api.sh "${IMAGE_NAME}:ci"
           bash tests/test-route-enhancements.sh "${IMAGE_NAME}:ci"
+          bash tests/test-route-parity.sh "${IMAGE_NAME}:ci"
+          bash tests/test-request-mirroring.sh "${IMAGE_NAME}:ci"
+          bash tests/test-listener-ports.sh "${IMAGE_NAME}:ci"
+          bash tests/test-https-listener-ports.sh "${IMAGE_NAME}:ci"
+          bash tests/test-backend-retries.sh "${IMAGE_NAME}:ci"
+          bash tests/test-request-deadlines.sh "${IMAGE_NAME}:ci"
+          bash tests/test-backend-tls.sh "${IMAGE_NAME}:ci"
+          bash tests/test-backend-tls-peers.sh "${IMAGE_NAME}:ci"
           bash tests/test-full-backup.sh "${IMAGE_NAME}:ci"
+          bash tests/test-nginx-generations.sh "${IMAGE_NAME}:ci"
+          bash tests/test-shared-waf-rules.sh "${IMAGE_NAME}:ci"
+          bash tests/test-grpc.sh "${IMAGE_NAME}:ci"
+          bash tests/test-stream-routes.sh "${IMAGE_NAME}:ci"
+          bash tests/test-provider-integration.sh "${IMAGE_NAME}:ci"
+          bash tests/test-shared-config-ha.sh "${IMAGE_NAME}:ci"
+          printf 'FROM %s:ci\nUSER root\nCOPY tests/fixtures/dehydrated-ha-test.sh /opt/liteedge/bin/dehydrated\nRUN chmod 755 /opt/liteedge/bin/dehydrated\nUSER 10001:10001\n' "$IMAGE_NAME" | docker build -t liteedge:ha-acme-test -f - .
+          bash tests/test-shared-config-ha.sh liteedge:ha-acme-test offline-acme
 
-      - name: Log in to GitHub Container Registry
-        if: github.event_name != 'pull_request'
-        shell: bash
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - uses: azure/setup-kubectl@v4
+        with:
+          version: v1.34.3
+      - name: Install kind
+        run: |
+          curl -fsSL https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64 -o "$RUNNER_TEMP/kind"
+          mkdir -p "$RUNNER_TEMP/lightedge-tools"
+          install -m 0755 "$RUNNER_TEMP/kind" "$RUNNER_TEMP/lightedge-tools/kind"
+          echo "$RUNNER_TEMP/lightedge-tools" >> "$GITHUB_PATH"
+      - name: Kubernetes smoke test
+        run: |
+          docker build --build-arg CONTROLLER_VERSION="${{ needs.build-appliance.outputs.controller_version }}" -t lightedge-controller:ci controller
+          bash tests/test-kubernetes-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
+          HA_MULTINODE=1 bash tests/test-shared-config-ha-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
+          bash tests/test-gateway-partitions-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
+          bash tests/test-gateway-backend-tls-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
+          bash tests/test-extra-routes-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
 
-      - name: Publish main image tags
-        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      - name: Three-VM QEMU multi-protocol regression
+        timeout-minutes: 45
         shell: bash
         run: |
           set -euo pipefail
-          sha_tag="sha-${GITHUB_SHA:0:12}"
-          for tag in latest v3 "$sha_tag"; do
-            docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:$tag"
-            docker push "${IMAGE_NAME}:$tag"
+          bash tests/test-qemu-kubernetes.sh "${IMAGE_NAME}:ci" lightedge-controller:ci "$PWD/qemu-qualification"
+      - name: Preserve QEMU regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lightedge-qemu-qualification-${{ needs.build-appliance.outputs.version }}
+          path: qemu-qualification/
+          if-no-files-found: warn
+
+      - name: Full Gateway API core qualification
+        timeout-minutes: 70
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c "import yaml"
+          docker build -t lightedge-conformance:v1.4.0 controller/conformance
+          mkdir -p qualification
+          export CONFORMANCE_CLIENT_VALIDATED_FRONTEND=true
+          export CONFORMANCE_VERSION="${{ needs.build-appliance.outputs.version }}"
+          set +e
+          CONFORMANCE_REPORT="$PWD/qualification/http.yaml" bash tests/test-gateway-conformance-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci lightedge-conformance:v1.4.0 >qualification/http.log 2>&1
+          http_rc=$?
+          CONFORMANCE_GRPC=true CONFORMANCE_PROFILE=GATEWAY-GRPC CONFORMANCE_FEATURES=Gateway,GRPCRoute,ReferenceGrant CONFORMANCE_REPORT="$PWD/qualification/grpc.yaml" bash tests/test-gateway-conformance-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci lightedge-conformance:v1.4.0 >qualification/grpc.log 2>&1
+          grpc_rc=$?
+          set -e
+          printf 'HTTP=%s GRPC=%s\n' "$http_rc" "$grpc_rc" | tee qualification/results.txt
+          test "$http_rc" = 0 && test "$grpc_rc" = 0
+          python3 tests/check-conformance-report.py qualification/http.yaml GATEWAY-HTTP "$CONFORMANCE_VERSION"
+          python3 tests/check-conformance-report.py qualification/grpc.yaml GATEWAY-GRPC "$CONFORMANCE_VERSION"
+
+      - name: Preserve qualification reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gateway-api-qualification-${{ needs.build-appliance.outputs.version }}
+          path: qualification/
+          if-no-files-found: warn
+
+      - name: Package version-matched Kubernetes chart
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          chart="$(mktemp -d)"
+          cp -a deploy/kubernetes/helm/lightedge "$chart/"
+          sed -i "s|^  repository: .*lightedge-controller|  repository: $CONTROLLER_IMAGE|; s|^  tag: .*|  tag: \"v$CONTROLLER_VERSION\"|; s|^  image: .*docker-waf:.*|  image: $IMAGE_NAME:v$APPLIANCE_VERSION|" "$chart/lightedge/values.yaml"
+          sed -i "s|^  lightedge.blaize.net/appliance-version:.*|  lightedge.blaize.net/appliance-version: \"$APPLIANCE_VERSION\"|" "$chart/lightedge/Chart.yaml"
+          helm lint "$chart/lightedge" --set appliance.enabled=true
+          helm lint "$chart/lightedge" --set provider.url=https://edge.example.com:9443
+          mkdir -p qualification/package
+          helm package "$chart/lightedge" --version "$CONTROLLER_VERSION" --app-version "$CONTROLLER_VERSION" --destination qualification/package
+          (cd qualification/package && sha256sum ./*.tgz > chart.sha256)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
+          path: qualification/package/
+          if-no-files-found: error
+
+      - name: Export exact qualified images for publication
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p qualified-images
+          docker tag "${IMAGE_NAME}:ci" "$IMAGE_NAME:v$APPLIANCE_VERSION"
+          docker tag lightedge-controller:ci "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION"
+          docker save "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" | gzip -1 > qualified-images/images.tar.gz
+          docker image inspect "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" --format '{{.Id}} {{index .RepoTags 0}}' > qualified-images/image-ids.txt
+          (cd qualified-images && sha256sum images.tar.gz image-ids.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: qualified-images-${{ needs.build-appliance.outputs.version }}
+          path: qualified-images/
+          if-no-files-found: error
+
+  publish-images:
+    if: startsWith(github.ref, 'refs/tags/v3.')
+    needs: [build-appliance, build-container, build-iso]
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: qualified-images-${{ needs.build-appliance.outputs.version }}
+          path: qualified-images
+      - name: Publish exact qualified appliance and controller images
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          (cd qualified-images && sha256sum -c SHA256SUMS)
+          docker load -i qualified-images/images.tar.gz
+          echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push "$IMAGE_NAME:v$APPLIANCE_VERSION"
+          docker push "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION"
+          for tag in v3 latest; do
+            docker tag "$IMAGE_NAME:v$APPLIANCE_VERSION" "$IMAGE_NAME:$tag"
+            docker push "$IMAGE_NAME:$tag"
           done
-          if [[ "${{ contains(github.event.head_commit.message, '[publish-release v3.1.6]') }}" == true ]]; then
-            docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:v3.1.6"
-            docker push "${IMAGE_NAME}:v3.1.6"
-          fi
-
-      - name: Publish release image tag
-        if: startsWith(github.ref, 'refs/tags/v3.')
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:${GITHUB_REF_NAME}"
-          docker push "${IMAGE_NAME}:${GITHUB_REF_NAME}"
-          docker tag "${IMAGE_NAME}:ci" "${IMAGE_NAME}:v3"
-          docker push "${IMAGE_NAME}:v3"
+          docker tag "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" "$CONTROLLER_IMAGE:v1"
+          docker push "$CONTROLLER_IMAGE:v1"
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v3.') || (github.event_name == 'push' && github.ref == 'refs/heads/master' && contains(github.event.head_commit.message, '[publish-release v3.1.6]'))
-    needs: [build-appliance, build-container, build-iso]
-    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v3.')
+    needs: [build-appliance, build-container, build-iso, publish-images]
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
     permissions:
       contents: write
 
@@ -273,6 +440,12 @@ jobs:
           name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
+      - name: Download matched Helm chart
+        uses: actions/download-artifact@v4
+        with:
+          name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
+          path: dist
+
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -280,7 +453,6 @@ jobs:
         run: |
           set -euo pipefail
           tag="${GITHUB_REF_NAME}"
-          if [[ "$GITHUB_REF" == refs/heads/master ]]; then tag=v3.1.6; fi
           (cd dist && sha256sum -c *.sha256)
           test -s "dist/liteedge-linux-musl-x86_64.tar.gz"
           test -s "dist/upgrade-liteedge.sh"
@@ -294,34 +466,6 @@ jobs:
             gh release create "$tag" dist/* \
               --repo "${GITHUB_REPOSITORY}" \
               --target "$GITHUB_SHA" \
-              --title "LiteEdge $tag — binaries, VM and bare-metal installers" \
+              --title "LightEdge $tag — controller v${{ needs.build-appliance.outputs.controller_version }}, binaries and installers" \
               --generate-notes
           fi
-      - name: Remove obsolete releases and matching tags once v3.1.5 is complete
-        if: success()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_REF_NAME}" != v3.1.5 &&
-                "${{ contains(github.event.head_commit.message, '[publish-release v3.1.5]') }}" != true ]]; then
-            exit 0
-          fi
-          # Never delete a prior release until v3.1.5 has all required assets.
-          assets="$(gh release view v3.1.5 --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-          for required in liteedge-linux-musl-x86_64.tar.gz \
-            "liteedge-vm-installer-3.1.5-x86_64.iso" \
-            "liteedge-baremetal-installer-3.1.5-x86_64.iso" \
-            upgrade-liteedge.sh upgrade-liteedge.sh.sha256; do
-            grep -qx "$required" <<< "$assets" || { echo "Missing v3.1.5 asset: $required" >&2; exit 1; }
-          done
-          while IFS= read -r old; do
-            [[ "$old" =~ ^v3\.[0-9]+\.[0-9]+$ ]] || continue
-            [[ "$old" != v3.1.5 ]] || continue
-            version="${old#v}"
-            if [[ "$(printf '%s\n' "$version" '3.1.4' | sort -V | tail -n1)" == '3.1.4' ]]; then
-              echo "Removing obsolete release and tag: $old"
-              gh release delete "$old" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
-            fi
-          done < <(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName --jq '.[].tagName')

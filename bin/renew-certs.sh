@@ -12,7 +12,7 @@ for mode_file in "$CERT_DIR"/*/mode; do
   site="$SITE_DIR/$slug.site"
   [[ -f "$site" ]] || continue
   host="$(kv_get "$site" HOST)"
-  if ! /opt/liteedge/bin/certctl.sh letsencrypt "$host"; then
+  if ! /opt/liteedge/bin/certctl.sh renew "$host"; then
     echo "Renewal failed for $host" >&2
     status=1
   fi

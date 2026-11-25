@@ -11,8 +11,10 @@ COUNT=0
 cleanup(){ docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$TEMP"; }
 trap cleanup EXIT
 sed '/limit_req zone=liteedge_admin burst=/d' "$ROOT/nginx/admin.conf" > "$TEMP/admin.conf"
-docker run -d --name "$NAME" -e ADMIN_USER=admin -e "ADMIN_PASSWORD=$PASS" -e LITEEDGE_RESTART_POLICY=no \
-  -p 127.0.0.1::9443 -v "$TEMP/admin.conf:/opt/liteedge/etc/nginx/admin.conf.template:ro" "$IMAGE" >/dev/null
+docker create --name "$NAME" -e ADMIN_USER=admin -e "ADMIN_PASSWORD=$PASS" -e LITEEDGE_RESTART_POLICY=no \
+  -p 127.0.0.1::9443 "$IMAGE" >/dev/null
+docker cp "$TEMP/admin.conf" "$NAME:/opt/liteedge/etc/nginx/admin.conf.template"
+docker start "$NAME" >/dev/null
 PORT="$(docker port "$NAME" 9443/tcp | awk -F: 'END{print $NF}')"
 BASE="https://127.0.0.1:$PORT"
 for i in $(seq 1 35); do
@@ -87,6 +89,25 @@ json '.sites | any(.host=="test.example")'
 expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=test.example -d match=prefix -d path=/api/ -d target=http://127.0.0.1:12001 -d backends=http://127.0.0.1:12002 "$BASE/api/v1/actions/route/add")" 'API route creation'
 expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site?host=test.example")" 'Site detail'
 json '.site.routes[0].target=="http://127.0.0.1:12001" and .site.routes[0].backends=="http://127.0.0.1:12002"'
+legacy_route="$(jq -cS .site.routes[0] "$RESP")"
+expect 401 "$(request "$BASE/api/v1/site-inventory")" 'Summary requires authentication'
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site-inventory")" 'Lightweight site inventory'
+json '.sites | any(.host=="test.example" and .route_count==1 and (has("routes")|not))'
+grep -Fiq 'Cache-Control: no-store' "$HEADERS"
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site-overview?host=test.example")" 'Site overview'
+json '.site.route_count==1 and (.site|has("configuration")|not) and (.site.routes[0].features|has("backend_tls")|not)'
+route_id="$(jq -r .site.routes[0].id "$RESP")"
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/route-detail?host=test.example&id=$route_id")" 'On-demand route detail'
+json '.route.target=="http://127.0.0.1:12001" and (.route.features|has("backend_tls"))'
+expect "$legacy_route" "$(jq -cS .route "$RESP")" "Full route detail matches legacy contract"
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site-configuration?host=test.example")" 'On-demand raw configuration'
+json '.ok and (.configuration|type=="string")'
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/installed-plugins")" 'Minimal plugin inventory'
+json '.ok and (.installed|type=="array")'
+expect 400 "$(request -u "admin:$PASS" "$BASE/api/v1/route-detail?host=test.example&id=../invalid")" 'Invalid route ID rejected'
+expect 404 "$(request -u "admin:$PASS" "$BASE/api/v1/site-overview?host=missing.example")" 'Missing host rejected'
+expect 405 "$(request -u "admin:$PASS" -X POST "$BASE/api/v1/site-inventory")" 'Summary is GET only'
+
 expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=second.example -d aliases=www.second.example "$BASE/api/v1/actions/site/save")" 'Create second site for scope selection'
 scopes='[{"host":"test.example","site":"test.example","routes":["prefix:/api/"]},{"host":"www.second.example","site":"second.example","routes":[]}]'
 expect 200 "$(request -u "admin:$PASS" -G --data-urlencode "type=all" --data-urlencode "scopes_json=$scopes" "$BASE/api/v1/logs")" 'Multi-host alias and route scope query'

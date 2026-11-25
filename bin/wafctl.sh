@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${LITEEDGE_CONFIG_LOCK_HELD:-0}" != 1 ]]; then
+  exec python3 /opt/liteedge/bin/configlock.py "$0" "$@"
+fi
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
 

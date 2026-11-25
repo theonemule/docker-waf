@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${LITEEDGE_CONFIG_LOCK_HELD:-0}" != 1 ]]; then
+  exec python3 /opt/liteedge/bin/configlock.py "$0" "$@"
+fi
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
 
@@ -43,6 +46,7 @@ apply_state() {
 validate_known_site() {
   validate_host "$1"
   [[ -f "$(site_file "$1")" ]] || die "Unknown site."
+  [[ "${2:-}" == read ]] || assert_manual_site "$1"
 }
 
 legacy_default_to_route() {
@@ -92,6 +96,7 @@ save_host_only() {
   local host="$1" aliases="$2" file tmp mode
   validate_host "$host"
   validate_aliases "$aliases"
+  assert_manual_site "$host" "$aliases"
   file="$(site_file "$host")"
 
   snapshot_state
@@ -119,6 +124,7 @@ save_legacy() {
   validate_host "$host"
   validate_mode "$mode"
   validate_aliases "$aliases"
+  assert_manual_site "$host" "$aliases"
   force_https="$(bool_value "$force_https")"
   waf="$(bool_value "$waf")"
   websocket="$(bool_value "$websocket")"
@@ -177,6 +183,7 @@ save_effective_config() {
 
 case "$cmd" in
   save)
+    assert_manual_site "${1:-}"
     if [[ $# -ge 8 ]]; then
       save_legacy "$@"
     else
@@ -201,6 +208,7 @@ case "$cmd" in
   delete)
     host="${1:-}"
     validate_host "$host"
+    assert_manual_site "$host"
     snapshot_state
     rm -f "$(site_file "$host")" "$(waf_rule_file "$host")"
     rm -rf "$(route_dir "$host")"
@@ -231,6 +239,51 @@ case "$cmd" in
     methods="${24:-ALL}"; rewrite_enabled="$(bool_value "${25:-0}")"
     rewrite_pattern="${26:-}"; rewrite_replacement="${27:-}"; x_headers="${28:-}"
     allow_ips="${29:-}"; rate_count="${30:-0}"; rate_unit="${31:-m}"; max_body="${32:-}"
+    validate_known_site "$host"
+    features_json="${33:-}"
+    weights="${34-__preserve__}"
+    if [[ "$weights" == __preserve__ ]]; then
+      weights=""
+      if [[ -n "$old_id" && "$old_id" =~ ^[a-f0-9]{16}$ && -f "$(route_dir "$host")/$old_id.route" ]]; then
+        weights="$(kv_get "$(route_dir "$host")/$old_id.route" BACKEND_WEIGHTS)"
+      fi
+    fi
+    if [[ -z "$features_json" && -n "$old_id" && "$old_id" =~ ^[a-f0-9]{16}$ && -f "$(route_dir "$host")/$old_id.route" && "$(kv_get "$(route_dir "$host")/$old_id.route" TYPED_ROUTE)" == 1 ]]; then
+      features_json="$(python3 /opt/liteedge/bin/route_features.py read "$(route_dir "$host")/$old_id.route")"
+    fi
+    typed=0; redirect=0
+    if [[ -n "$features_json" ]]; then
+      features_json="$(printf '%s' "$features_json" | python3 /opt/liteedge/bin/route_features.py normalize "$match" "$path")" || die 'Invalid advanced route features.'
+      # A default feature object does not change existing native path semantics.
+      if jq -e '.grpc or .deadlines!=null or .backend_tls_peers!={} or .backend_tls!=null or .retry!=null or .mirrors!=[] or .header_matches!=[] or .query_matches!=[] or .method!="" or .request_headers!=[] or .response_headers!=[] or .redirect!=null or .rewrite!=null or .schemes!=["http","https"] or .precedence!=0' <<< "$features_json" >/dev/null; then
+        typed=1
+        if jq -e '.grpc' <<< "$features_json" >/dev/null; then
+          [[ "$rewrite_enabled" == 0 && -z "$x_headers" && "$force_https" == 0 && "$methods" == ALL && "$lb_mode" != cookie ]] || die "gRPC cannot use legacy HTTP transformations or cookie affinity."
+        fi
+        if jq -e '.retry!=null and .retry.attempts>0' <<< "$features_json" >/dev/null;then
+          [[ -n "$backends" ]] || jq -e '.deadlines!=null or .backend_tls_peers!={} or (.retry.backoff_ms//0)>0' <<< "$features_json" >/dev/null || die 'Retries require multiple distinct HTTP backends.'
+          [[ -z "$backends" ]] || [[ "$(printf '%s\n' "$target" "${backends//,/$'\n'}"|sort -u|wc -l)" == "$(printf '%s\n' "$target" "${backends//,/$'\n'}"|wc -l)" ]] || die 'Retry backends must be distinct.'
+        fi
+        if jq -e '.mirrors!=[]' <<< "$features_json" >/dev/null; then
+          [[ -z "$x_headers" && "$rewrite_enabled" == 0 && "$force_https" == 0 ]] || die 'Mirroring cannot be combined with legacy request transformations or forced HTTPS.'
+          [[ "$target" =~ ^https?://[A-Za-z0-9._:-]+$ ]] || die 'Mirroring requires an origin-only primary upstream.'
+        fi
+        [[ -z "$x_headers" ]] || [[ "$(jq '.request_headers|length' <<< "$features_json")" == 0 ]] || die 'Use either typed or legacy request headers, not both.'
+        [[ "$rewrite_enabled" == 0 ]] || [[ "$(jq -r '.rewrite==null' <<< "$features_json")" == true ]] || die 'Use either typed or legacy rewrite, not both.'
+        if jq -e '.redirect!=null' <<< "$features_json" >/dev/null; then
+          redirect=1
+          [[ -z "$target" && -z "$backends" && -z "$weights" && "$health_enabled" == 0 && "$force_https" == 0 && "$rewrite_enabled" == 0 && -z "$x_headers" && "$methods" == ALL ]] || die 'Redirect routes cannot have backends, health checks or legacy transformations.'
+        fi
+        if jq -e '.rewrite!=null and .rewrite.path!=null' <<< "$features_json" >/dev/null; then
+          [[ "$target" =~ ^https?://[A-Za-z0-9._:-]+$ ]] || die 'Typed path rewrites require an origin-only upstream URL.'
+        fi
+      fi
+    fi
+    if [[ -n "$weights" ]]; then
+      [[ "$weights" =~ ^[1-9][0-9]{0,6}(,[1-9][0-9]{0,6})*$ ]] || die 'Invalid backend weights.'
+      IFS=',' read -r -a weight_values <<< "$weights"
+      for weight in "${weight_values[@]}"; do ((weight<=1000000)) || die 'Backend weight exceeds limit.'; done
+    fi
     validate_route_methods "$methods"
     validate_route_rewrite "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
     validate_route_headers "$x_headers"
@@ -244,11 +297,18 @@ case "$cmd" in
 
     # Newline-separated textarea is normalized to a single-line data record.
     backends="$(printf '%s' "$backends" | tr '\r\n' ',,' | sed 's/,,*/,/g;s/^,*//;s/,*$//')"
-    if [[ -n "$backends" ]]; then
+    verified_tls=0
+    if [[ -n "$features_json" ]] && jq -e '.backend_tls!=null' <<< "$features_json" >/dev/null; then
+      verified_tls=1
+      printf '%s' "$features_json" | python3 /opt/liteedge/bin/route_features.py validate-tls-targets "$target" "$backends" "$health_enabled" || die 'Invalid verified backend TLS configuration.'
+    fi
+    if [[ -n "$features_json" ]] && jq -e '.backend_tls_peers!={}' <<< "$features_json" >/dev/null;then
+      printf '%s' "$features_json" | python3 /opt/liteedge/bin/route_features.py validate-tls-targets "$target" "$backends" "$health_enabled" || die 'Invalid per-peer TLS configuration.'
+    elif [[ -n "$backends" ]]; then
       # Functions are shared with the renderer so validation is consistent.
       # shellcheck disable=SC1091
 source /opt/liteedge/bin/poolctl.sh
-      pool_validate "$target" "$backends" "$lb_mode" "$max_fails" "$fail_timeout"
+      pool_validate "$target" "$backends" "$lb_mode" "$max_fails" "$fail_timeout" "$verified_tls"
     fi
 
     if [[ "$waf_pl" == generic || "$waf_pl" == wordpress ]]; then
@@ -263,7 +323,11 @@ source /opt/liteedge/bin/poolctl.sh
     validate_known_site "$host"
     validate_route_match "$match"
     validate_route_path "$path"
-    validate_upstream "$target"
+    [[ "$redirect" == 1 ]] || validate_upstream "$target"
+    if [[ -n "$weights" ]]; then
+      IFS=',' read -r -a endpoints <<< "$target${backends:+,$backends}"
+      [[ "${#weight_values[@]}" == "${#endpoints[@]}" ]] || die 'Backend weight count must match backend count.'
+    fi
     validate_timeout "$timeout"
     validate_waf_pl "$waf_pl"
     waf_plugins="$(normalize_plugin_csv "$waf_plugins")"
@@ -291,6 +355,13 @@ source /opt/liteedge/bin/poolctl.sh
     dir="$(route_dir "$host")"
     mkdir -p "$dir"
     id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
+    if [[ "$typed" == 1 ]]; then
+      id="$(printf '%s' "$features_json" | python3 /opt/liteedge/bin/route_features.py manual-id "$match" "$path" "$target")"
+    fi
+    if [[ "$id" != "$old_id" && -e "$dir/$id.route" ]]; then
+      rm -rf "$STATE_BACKUP"
+      die 'A route with this identity already exists.'
+    fi
     {
       printf 'ID=%s\n' "$id"
       printf 'MATCH=%s\n' "$match"
@@ -307,6 +378,11 @@ source /opt/liteedge/bin/poolctl.sh
       printf 'METHODS=%s\nREWRITE_ENABLED=%s\nREWRITE_PATTERN=%s\nREWRITE_REPLACEMENT=%s\n' "$methods" "$rewrite_enabled" "$rewrite_pattern" "$rewrite_replacement"
       printf 'X_HEADERS_B64=%s\n' "$(printf '%s' "$x_headers" | base64 | tr -d '\n')"
       printf 'BACKENDS=%s\nLB_MODE=%s\nMAX_FAILS=%s\nFAIL_TIMEOUT=%s\n' "$backends" "$lb_mode" "$max_fails" "$fail_timeout"
+      printf 'BACKEND_WEIGHTS=%s\n' "$weights"
+      if [[ "$typed" == 1 ]]; then
+        printf 'TYPED_ROUTE=1\n'
+        printf '%s' "$features_json" | python3 /opt/liteedge/bin/route_features.py record
+      fi
       printf 'HEALTH_ENABLED=%s\nHEALTH_PATH=%s\nHEALTH_EXPECT=%s\nHEALTH_INTERVAL=%s\nHEALTH_TIMEOUT=%s\nHEALTH_FALL=%s\nHEALTH_RISE=%s\nHEALTH_COOLDOWN=%s\n' "$health_enabled" "$health_path" "$health_expect" "$health_interval" "$health_timeout" "$health_fall" "$health_rise" "$health_cooldown"
       if [[ -n "$import_key" ]]; then
         printf 'ACTION=proxy\nIMPORT_KEY=%s\nIMPORT_ORIGINAL_TARGET=%s\nIMPORT_ORIGINAL_TIMEOUT=%s\nIMPORT_SCHEME=%s\n' "$import_key" "$import_original_target" "$import_original_timeout" "$import_scheme"
@@ -381,7 +457,7 @@ source /opt/liteedge/bin/poolctl.sh
 
   config-diff)
     host="${1:-}"
-    validate_known_site "$host"
+    validate_known_site "$host" read
     baseline="$(site_nginx_baseline "$host")"
     current="$(site_nginx_file "$host")"
     [[ -s "$baseline" && -s "$current" ]] || exit 0

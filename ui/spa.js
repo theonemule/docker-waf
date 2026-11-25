@@ -8,8 +8,9 @@
   const root = document.getElementById("spa-root");
   const dialog = document.getElementById("spa-dialog");
   const feedback = document.getElementById("spa-feedback");
-  const cache = {sites:[], site:null, plugins:[], catalog:null, rules:[], filters:{}};
+  const cache = {site:null, plugins:[], catalog:null, rules:[], filters:{}};
   let crsCheckSequence = 0;
+  let navigationSequence = 0;
   const escape = (value) => String(value ?? "").replace(/[&<>"']/g, ch =>
     ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[ch]));
   const q = (value) => encodeURIComponent(String(value));
@@ -100,13 +101,30 @@
       +'<div class="spinner-border spinner-border-sm" aria-hidden="true"></div>Loading…</div>';
   }
   async function refresh() {
-    const page=current();
+    const page=current(), sequence=++navigationSequence;
     document.querySelectorAll("[data-nav]").forEach(el=>el.classList.toggle("active",el.getAttribute("href")==="#/"+(page.view==="site"?"sites":page.view)));
     loading();
     try {
-      if(page.view==="sites") return renderSites((await api("sites")).sites);
-      if(page.view==="site") return renderSite((await api("site?host="+q(page.host))).site);
-      if(page.view==="server") return renderServer(await api("server"));
+      if(page.view==="sites") {
+        const data=await api("site-inventory");
+        if(sequence===navigationSequence)renderSites(data.sites);
+        return;
+      }
+      if(page.view==="site") {
+        const data=await api("site-overview?host="+q(page.host));
+        if(sequence===navigationSequence)renderSite(data.site);
+        return;
+      }
+      if(page.view==="server") {
+        const server=await api("server");
+        let providers={unavailable:true};
+        if(location.protocol==="https:") {
+          try {providers=await api("provider-admin");} catch(_) { /* Keep other settings available. */ }
+        }
+        let transport={unavailable:true};
+        try{transport=await api("streams");}catch(_){}
+        return renderServer(server,providers,transport);
+      }
       if(page.view==="alerts") return renderAlerts(await api("alerts"));
       if(page.view==="owasp") {
         renderOwasp(await api("owasp"));
@@ -115,56 +133,105 @@
       }
       if(page.view==="logs") return renderLogs(await api("catalog"));
       root.innerHTML='<div class="alert alert-warning">Page not found.</div>';
-    } catch(err){renderError(err);}
+    } catch(err){if(sequence===navigationSequence)renderError(err);}
   }
   function renderSites(sites) {
-    cache.sites=sites;
     root.innerHTML='<div class="d-flex justify-content-between align-items-center mb-3"><h1 class="h3">Sites</h1>'
       +rowActions([{op:"add-site",label:"Add site"},{op:"import",label:"Import"},{op:"export",label:"Export"}])+'</div>'
       +'<div class="card table-responsive"><table class="table table-hover align-middle mb-0"><thead><tr>'
       +'<th>Host</th><th>Aliases</th><th>Routes</th><th>TLS</th><th>Status</th><th>Actions</th></tr></thead><tbody>'
       +(sites.map(s=>'<tr><td><a href="'+navUrl("site",s.host)+'" data-nav>'+escape(s.host)+'</a></td>'
        +'<td>'+escape(s.aliases||"—")+'</td><td>'+s.route_count+'</td><td>'+escape(s.tls)+'</td>'
-       +'<td>'+ (s.enabled?'Enabled':'Disabled')+'</td><td>'
-       +rowActions([{op:"toggle-site",label:s.enabled?"Disable":"Enable",data:{host:s.host,enabled:s.enabled?"1":"0"}},
-                    {op:"delete-site",label:"Delete",danger:true,data:{host:s.host}}])+'</td></tr>').join("")||
+       +'<td>'+ (s.provider?'Managed: '+escape(s.provider):(s.enabled?'Enabled':'Disabled'))+'</td><td>'
+       +(s.provider?'—':rowActions([{op:"toggle-site",label:s.enabled?"Disable":"Enable",data:{host:s.host,enabled:s.enabled?"1":"0"}},
+                    {op:"delete-site",label:"Delete",danger:true,data:{host:s.host}}]))+'</td></tr>').join("")||
        '<tr><td colspan="6">No sites configured.</td></tr>')+'</tbody></table></div>';
   }
-  function routeSummary(r) {
-    return '<tr><td><code>'+escape(r.path)+'</code></td><td>'+escape(r.match)+'</td>'
-      +'<td>'+escape([r.target,...String(r.backends||"").split(",").filter(Boolean)].join(", "))+'</td>'
-      +'<td>'+escape(r.lb_mode||"round_robin")+'</td><td>'
-      +rowActions([{op:"edit-route",label:"Configure",data:{id:r.id}},
-                    {op:"delete-route",label:"Delete",danger:true,data:{id:r.id}}])+'</td></tr>';
+  function featureSummary(r) {
+    const f=r.features||{};
+    const labels=[];
+    if(f.grpc)labels.push("gRPC (HTTP/2)");
+    if(f.method)labels.push("Method: "+f.method);
+    for(const h of f.header_matches||[])labels.push("Header "+h.name+" = "+h.value);
+    for(const q of f.query_matches||[])labels.push("Query "+q.name+" = "+q.value);
+    for(const h of f.request_headers||[])labels.push("Request header "+h.op+" "+h.name+(h.value?" = "+h.value:""));
+    for(const h of f.response_headers||[])labels.push("Response header "+h.op+" "+h.name+(h.value?" = "+h.value:""));
+    if(f.deadlines)labels.push("Request/backend deadline: "+(f.deadlines.request_ms??"default")+"/"+(f.deadlines.backend_ms??"default")+" ms");
+    for(const [target,trust] of Object.entries(f.backend_tls_peers||{}))labels.push("Verified TLS peer: "+target+" ("+trust.hostname+")");
+    if(f.backend_tls)labels.push("Verified upstream TLS: "+f.backend_tls.hostname);
+    if(f.retry)labels.push(f.retry.attempts===0?"Retries disabled":"Backend retries: "+f.retry.attempts+"; HTTP "+(f.retry.codes||[]).join(", ")+"; budget "+(f.retry.budget_ms||"unlimited")+" ms; backoff "+(f.retry.backoff_ms||0)+" ms");
+    for(const mirror of f.mirrors||[])labels.push("Mirror ("+(mirror.basis_points/100)+"%): "+mirror.target);
+    if(f.redirect)labels.push("Redirect "+f.redirect.status_code+" "+(f.redirect.scheme||"same scheme")+" "+(f.redirect.hostname||"same host")+(f.redirect.port?":"+f.redirect.port:"")+(f.redirect.path?" · "+f.redirect.path.type+" path → "+f.redirect.path.value:""));
+    if(f.rewrite)labels.push("Rewrite "+(f.rewrite.hostname||"")+(f.rewrite.path?" · "+f.rewrite.path.type+" path → "+f.rewrite.path.value:""));
+    labels.push("Listeners: "+(f.schemes||["http","https"]).join(", "));
+    if(f.precedence)labels.push("Precedence: "+f.precedence);
+    if(f.host_priority)labels.push("Host priority: "+f.host_priority);
+    if(r.provider_quarantined==="1")labels.push("Rejected by appliance policy — forwarding blocked (HTTP 500)");
+    if(r.waf_profile)labels.push("WAF profile: "+r.waf_profile);
+    if(r.allow_ips)labels.push("IP allowlist: "+r.allow_ips);
+    if(Number(r.rate_count)>0)labels.push("Rate: "+r.rate_count+"/"+r.rate_unit);
+    if(r.max_body)labels.push("Maximum body: "+r.max_body);
+    if(r.health_enabled==="1")labels.push("Health: "+r.health_path+" · "+r.health_expect+" · "+r.health_interval+"s");
+    if(r.timeout)labels.push("Timeout: "+r.timeout+"s");
+    return labels.map(x=>'<div class="small text-secondary">'+escape(x)+'</div>').join("");
+  }
+  function backendSummary(r) {
+    if(r.features?.redirect)return "Redirect (no backend)";
+    return [r.target,...String(r.backends||"").split(",").filter(Boolean)].map((v,i)=>(v==="invalid"?"Local HTTP 500":v==="unavailable"?"Local HTTP 503":v)+(r.weights?.length?" (weight "+r.weights[i]+")":"")).join(", ");
+  }
+  function routeSummary(r,managed=false) {
+    const f=r.features||{}, type=f.grpc?"gRPC":f.redirect?"Redirect":f.rewrite?"Rewrite + proxy":"HTTP proxy";
+    return '<tr><td><code>'+escape(r.path)+'</code><div class="small text-secondary">'+escape(type)+'</div></td><td>'+escape(r.match)+'</td>'
+      +'<td class="text-break">'+escape(backendSummary(r))+'</td><td>'+escape(r.waf==="1"?"Enabled · PL"+r.waf_pl:"Disabled")+'</td><td>'
+      +(managed?rowActions([{op:"view-route",label:"View details",data:{id:r.id}}]):rowActions([{op:"edit-route",label:"Configure",data:{id:r.id}},
+                    {op:"delete-route",label:"Delete",danger:true,data:{id:r.id}}]))+'</td></tr>';
   }
   function renderSite(site) {
     cache.site=site;
-    root.innerHTML='<div class="d-flex justify-content-between align-items-center mb-3">'
-      +'<div><h1 class="h3">'+escape(site.host)+'</h1><div class="small text-secondary">'
-      +(site.enabled?"Enabled":"Disabled")+' · TLS '+escape(site.tls)+'</div></div>'
-      +rowActions([{op:"toggle-site",label:site.enabled?"Disable site":"Enable site",data:{host:site.host,enabled:site.enabled?"1":"0"}}])+'</div>'
-      +card("Hostnames",form("site/save",'<div class="spa-form-grid">'+field("Hostname","host",site.host,"text","readonly")
-        +field("Aliases","aliases",site.aliases)+'</div>',"Save host"))
-      +card("Routes",'<div class="mb-3">'+rowActions([{op:"add-route",label:"Add route"}])+'</div>'
-        +'<div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Path</th><th>Match</th><th>Backends</th><th>Balancing</th><th></th></tr></thead><tbody>'
-        +(site.routes.map(routeSummary).join("")||'<tr><td colspan="5">No routes configured yet.</td></tr>')+'</tbody></table></div>')
-      +card("TLS certificate",'<p>Current: '+escape(site.tls)+'</p>'+form("cert/email/save",
-          '<input type="hidden" name="host" value="'+escape(site.host)+'">'+field("ACME contact email","email",site.cert_email,"email"),"Save contact email")
-        +'<div class="mt-3">'+rowActions([{op:"selfsigned",label:"Generate self-signed"}, {op:"letsencrypt",label:"Issue / renew Let’s Encrypt"}])+'</div>'
-        +form("cert/import",'<input type="hidden" name="host" value="'+escape(site.host)+'"><div class="spa-form-grid">'
-          +textarea("Certificate PEM chain","certificate","",9)+textarea("Private key PEM","private_key","",9)+'</div>',"Import PEM certificate"))
-      +card("Site WAF rule exclusions",'<div class="mb-2">'+(site.disabled_rules.map(id=>'<span class="badge text-bg-light border me-2">'
-           +escape(id)+' <button type="button" data-operation="enable-site-rule" data-rule-id="'+escape(id)+'" class="btn btn-sm p-0">×</button></span>').join("")||'No disabled rules')+'</div>'
-           +form("waf/disable",'<input name="host" type="hidden" value="'+escape(site.host)+'">'+field("Rule ID to disable","rule_id","","text","required pattern=\"[0-9]{1,9}\""),"Disable rule"))
-      +card("Advanced NGINX",'<p class="small text-secondary">Manual site configuration is validated and merged with generated configuration.</p>'
-         +(site.conflict?'<div class="alert alert-warning">'+escape(site.conflict)+'</div>':"")
-         +(site.delta?'<details><summary>Generated delta</summary><pre class="spa-code">'+escape(site.delta)+'</pre></details>':"")
-         +form("config/save",'<input name="host" type="hidden" value="'+escape(site.host)+'">'
-           +textarea("Effective configuration","config",site.configuration,24),"Validate and save")
-         +rowActions([{op:"reset-config",label:"Reset to generated"}]))
-      +card("Transfer configuration",rowActions([{op:"export-site",label:"Export site"},
-           {op:"export-site-certs",label:"Export with certificates"},
-           {op:"import-site",label:"Import site"}]));
+    const managed=!!site.provider, tabs=managed?["Routes","Certificates","Security"]:["Routes","Hostnames","Certificates","Security","Advanced"];
+    const routes=card("Application routes",'<p class="text-secondary small">Match incoming requests and forward them to a backend or redirect them.</p>'
+      +(managed?'':'<div class="mb-3">'+rowActions([{op:"add-route",label:"Add route"}])+'</div>')
+      +'<div class="table-responsive"><table class="table table-sm align-middle"><thead><tr><th>Path / purpose</th><th>Match</th><th>Destination</th><th>WAF</th><th>Actions</th></tr></thead><tbody>'
+      +(site.routes.map(r=>managed?routeSummary(r,true):routeSummary(r)).join("")||'<tr><td colspan="5">No routes configured yet.</td></tr>')+'</tbody></table></div>');
+    const tls='<p>Current: '+escape(site.tls)+(site.tls_reject?' · TLS handshake rejected':'')+'</p><p>Listeners: '+escape((site.listeners||[]).join(', '))+'</p>'
+      +Object.entries(site.tls_listeners||{}).map(([k,v])=>'<p>'+escape(k)+': '+escape(v)+'</p>').join("")+(site.wildcard_single?'<p>Hostname wildcard: one DNS label (Ingress)</p>':'');
+    const cert=card("Frontend TLS certificates",tls+(managed?'':form("cert/email/save",
+      '<input type="hidden" name="host" value="'+escape(site.host)+'">'+field("ACME contact email","email",site.cert_email,"email"),"Save contact email")
+      +'<div class="mt-3">'+rowActions([{op:"selfsigned",label:"Generate self-signed"},{op:"letsencrypt",label:"Issue / renew Let’s Encrypt"}])+'</div>'
+      +'<details class="mt-3"><summary>Import an existing certificate</summary>'+form("cert/import",'<input type="hidden" name="host" value="'+escape(site.host)+'"><div class="spa-form-grid">'
+      +textarea("Certificate PEM chain","certificate","",9)+textarea("Private key PEM","private_key","",9)+'</div>',"Import PEM certificate")+'</details>'));
+    const security=card("Site-wide WAF exclusions",'<p class="small text-secondary">These exclusions apply across the site. Configure route-specific protection in each route.</p><div class="mb-2">'
+      +((site.disabled_rules||[]).map(id=>'<span class="badge text-bg-light border me-2">'+escape(id)+(managed?'':' <button type="button" data-operation="enable-site-rule" data-rule-id="'+escape(id)+'" class="btn btn-sm p-0">×</button>')+'</span>').join("")||'No disabled rules')+'</div>'
+      +(managed?'':form("waf/disable",'<input name="host" type="hidden" value="'+escape(site.host)+'">'+field("Rule ID to disable","rule_id","","text",'required pattern="[0-9]{1,9}"'),"Disable rule")));
+    const hostnames=managed?'':card("Hostnames",form("site/save",'<div class="spa-form-grid">'+field("Hostname","host",site.host,"text","readonly")+field("Aliases","aliases",site.aliases)+'</div>',"Save host"));
+    const panels={Routes:routes,Hostnames:hostnames,Certificates:cert,Security:security,Advanced:'<div data-site-advanced></div>'+card("Transfer configuration",rowActions([{op:"export-site",label:"Export site"},{op:"export-site-certs",label:"Export with certificates"},{op:"import-site",label:"Import site"}]))};
+    root.innerHTML='<div class="mb-3"><a href="#/sites">← All sites</a></div><div class="d-flex justify-content-between align-items-center mb-3"><div><h1 class="h3 mb-1">'+escape(site.host)+'</h1><div class="text-secondary small">'+(managed?'Kubernetes managed · '+escape(site.provider):'Manually managed · '+(site.enabled?'Enabled':'Disabled'))+' · TLS '+escape(site.tls)+'</div></div>'
+      +(managed?'':rowActions([{op:"toggle-site",label:site.enabled?"Disable site":"Enable site",data:{host:site.host,enabled:site.enabled?"1":"0"}}]))+'</div>'
+      +(managed?'<div class="alert alert-info">Managed by Kubernetes provider '+escape(site.provider)+'. Edit the Kubernetes resources to change routing and TLS. This view is read-only.</div>':'')
+      +'<nav class="nav nav-tabs mb-3" aria-label="Site settings">'+tabs.map((t,i)=>'<button type="button" class="nav-link '+(!i?'active':'')+'" data-operation="site-tab" data-tab="'+t+'" aria-current="'+(!i?'page':'false')+'">'+t+'</button>').join("")+'</nav>'
+      +tabs.map((t,i)=>'<section data-site-panel="'+t+'" '+(i?'hidden':'')+'>'+panels[t]+'</section>').join("");
+  }
+  async function siteTab(name) {
+    const site=cache.site;
+    for(const panel of root.querySelectorAll("[data-site-panel]"))panel.hidden=panel.dataset.sitePanel!==name;
+    for(const button of root.querySelectorAll("[data-tab]")){
+      const active=button.dataset.tab===name;
+      button.classList.toggle("active",active);button.setAttribute("aria-current",active?"page":"false");
+    }
+    const panel=root.querySelector("[data-site-advanced]");
+    if(name!=="Advanced"||!panel||site.provider)return;
+    panel.textContent="Loading current NGINX configuration…";
+    try {
+      const request=(Number(panel.dataset.readSequence)||0)+1;
+      panel.dataset.readSequence=String(request);
+      const data=await api("site-configuration?host="+q(site.host));
+      if(!panel.isConnected||panel.closest("[data-site-panel]").hidden||Number(panel.dataset.readSequence)!==request)return;
+      panel.innerHTML=card("Advanced NGINX",'<p class="small text-secondary">Manual site configuration is validated and merged with generated configuration.</p>'
+        +(data.conflict?'<div class="alert alert-warning">'+escape(data.conflict)+'</div>':"")
+        +(data.delta?'<details><summary>Generated delta</summary><pre class="spa-code">'+escape(data.delta)+'</pre></details>':"")
+        +form("config/save",'<input name="host" type="hidden" value="'+escape(site.host)+'">'+textarea("Effective configuration","config",data.configuration,24),"Validate and save")
+        +rowActions([{op:"reset-config",label:"Reset to generated"}]));
+    } catch(err){if(panel.isConnected)panel.textContent=err.message;}
   }
   const defaultRoute = {match:"prefix",path:"/",target:"",backends:"",timeout:"60",
     websocket:"1",force_https:"1",waf:"1",waf_pl:"1",waf_plugins:"",waf_disabled:"",
@@ -174,30 +241,77 @@
     methods:"ALL",rewrite_enabled:"0",rewrite_pattern:"",rewrite_replacement:"",x_headers:"",
     allow_ips:"",rate_count:"0",rate_unit:"m",max_body:""};
   async function editRoute(route) {
-    const r={...defaultRoute,...route};
-    if(!cache.plugins.length){
-      try {cache.plugins=(await api("owasp")).installed||[];}catch(_){}
-    }
+    const r={...defaultRoute,...route}, host=cache.site.host;
+    for(const key of ["timeout","max_fails","fail_timeout","health_interval","health_timeout","health_fall","health_rise","health_cooldown"])if(r[key]==="")r[key]=defaultRoute[key];
+    const installed=(await api("installed-plugins")).installed||[];
+    if(current().host!==host)return;
     const urls=[r.target,...String(r.backends||"").split(",").filter(Boolean)];
-    const plugins=cache.plugins.map(p=>check(p.name,"plugin_"+p.name,
-        String(r.waf_plugins||"").split(",").includes(p.name))).join("");
+    const f=r.features||{};
+    const action=f.redirect?"redirect":f.rewrite?"rewrite":"proxy";
+    const redirect=f.redirect||{}, rewrite=f.rewrite||{};
+    const matchText=items=>(items||[]).map(x=>x.name+"="+x.value).join("\n");
+    const opText=items=>(items||[]).map(x=>x.op+" "+x.name+(x.value?"="+x.value:"")).join("\n");
+
+    const selectedPlugins=String(r.waf_plugins||"").split(",").filter(Boolean);
+    const availablePlugins=new Map(installed.map(p=>[p.name,p.name]));
+    for(const name of selectedPlugins)if(!availablePlugins.has(name))availablePlugins.set(name,name+" (not installed)");
+    const plugins=[...availablePlugins].map(([name,label])=>check(label,"plugin_"+name,selectedPlugins.includes(name))).join("");
     modal(route?.id?"Configure route":"Add route",
       form(route?.id?"route/save":"route/add",
-        '<input name="host" type="hidden" value="'+escape(cache.site.host)+'">'
+        '<input name="host" type="hidden" value="'+escape(host)+'">'
         +(route?.id?'<input name="id" type="hidden" value="'+escape(route.id)+'">':"")
         +'<div class="spa-form-grid">'
         +select("Match","match",[["prefix","Prefix"],["exact","Exact"],["regex","Regex"]],r.match)
         +field("Route path","path",r.path,"text","required")
         +field("Timeout (seconds)","timeout",r.timeout,"number","min=1 max=86400 required")+'</div>'
-        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Backend pool</legend>'
-        +'<div data-pool>'+urls.map(u=>poolRow(u)).join("")+'</div>'
+        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Advanced request matching</legend>'
+        +'<div class="spa-form-grid">'+field("Listeners (http, https, http:port, https:port)","feature_schemes",(f.schemes||["http","https"]).join(","),"text")
+        +select("Match HTTP method (optional)","feature_method",[["","Any method"],...["GET","HEAD","POST","PUT","DELETE","CONNECT","OPTIONS","TRACE","PATCH"].map(x=>[x,x])],f.method||"")
+        +field("Tie-break priority (lower wins)","feature_precedence",f.precedence||0,"number","min=0 max=1000000")+'</div>'
+        +textarea("Exact header matches (Name=value, one per line)","feature_headers",matchText(f.header_matches),3)
+        +textarea("Exact query matches (name=value, one per line)","feature_queries",matchText(f.query_matches),3)
+        +'<p class="form-text">All predicates must match. Query literals use unreserved URL characters. Advanced routes use segment-aware prefixes.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Route action</legend>'
+        +select("Backend protocol","feature_grpc",[["0","HTTP"],["1","gRPC (HTTP/2)"]],f.grpc?"1":"0")
+        +select("Action","feature_action",[["proxy","Proxy"],["redirect","Redirect"],["rewrite","Rewrite and proxy"]],action)
+        +'<div class="spa-form-grid" data-route-action-fields="redirect">'+field("Redirect hostname (optional)","redirect_host",redirect.hostname||"")
+        +select("Redirect scheme","redirect_scheme",[["","Same scheme"],["http","HTTP"],["https","HTTPS"]],redirect.scheme||"")
+        +field("Redirect port (0 = default)","redirect_port",redirect.port||0,"number","min=0 max=65535")
+        +select("Redirect status","redirect_status",["301","302","303","307","308"].map(x=>[x,x]),String(redirect.status_code||302))
+        +select("Redirect path replacement","redirect_path_type",[["","Keep path"],["full","Replace full path"],["prefix","Replace matched prefix"]],redirect.path?.type||"")
+        +field("Redirect replacement path","redirect_path",redirect.path?.value||"")+'</div>'
+        +'<div class="spa-form-grid" data-route-action-fields="rewrite">'+field("Rewrite backend Host (optional)","rewrite_host",rewrite.hostname||"")
+        +select("Rewrite path replacement","typed_rewrite_path_type",[["","Keep path"],["full","Replace full path"],["prefix","Replace matched prefix"]],rewrite.path?.type||"")
+        +field("Rewrite replacement path","typed_rewrite_path",rewrite.path?.value||"")+'</div>'
+        +'<div data-route-action-fields="proxy rewrite">'+textarea("Request header operations (set/add X-Name=value or remove X-Name)","feature_header_ops",opText(f.request_headers),4)+'</div>'
+        +textarea("Response header operations (set/add X-Name=value or remove X-Name)","feature_response_ops",opText(f.response_headers),4)
+        +'<p class="form-text">Response operations preserve appliance security headers. Redirect routes have no backends. For proxy routes, typed header operations support safe X-headers; forwarding identity remains protected.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy"><legend class="float-none fs-6">Request mirroring</legend>'
+        +textarea("Mirror HTTP origins (URL or URL | percentage; maximum four)","feature_mirrors",(f.mirrors||[]).map(m=>m.target+" | "+m.basis_points/100).join("\n"),3)
+        +'<p class="form-text">Copies the full request including headers and body to each listed destination. Use only trusted backends. Not compatible with request rewriting, legacy request transformations or forced HTTPS.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Verified backend TLS</legend>'
+        +field("Certificate DNS identity (SNI and verification)","feature_backend_tls_host",f.backend_tls?.hostname||"")
+        +textarea("CA certificate bundle (PEM, public certificates only)","feature_backend_tls_ca",f.backend_tls?.ca_certificate||"",6)
+        +textarea("Independent TLS peers (JSON: HTTPS origin → hostname and ca_certificate)","feature_backend_tls_peers",Object.keys(f.backend_tls_peers||{}).length?JSON.stringify(f.backend_tls_peers,null,2):"",5)
+        +'<p class="form-text">Use either a common identity or individual trust entries. Set both fields to verify HTTPS upstreams. All endpoints must be HTTPS origins sharing this identity. Active probes use this same trust and identity. Mirroring is not supported with this mode.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Backend retries</legend><div class="spa-form-grid">'
+        +select("Retry attempts","feature_retry_attempts",[["","Appliance default"],["0","Disabled"],...["1","2","3","4"].map(n=>[n,n])],f.retry?String(f.retry.attempts):"")
+        +field("Retry HTTP statuses (comma separated)","feature_retry_codes",(f.retry?.codes||[]).join(","),"text")
+        +field("Minimum retry backoff (ms)","feature_retry_backoff",f.retry?.backoff_ms||0,"number","min=0 max=60000")
+        +field("Retry budget in milliseconds (0 = no additional limit)","feature_retry_budget",f.retry?.budget_ms||0,"number","min=0 max=60000")+'</div><p class="form-text">Without deadlines or backoff, retries require distinct backends. Deadline-aware retries are limited to bodyless GET, HEAD and OPTIONS. The budget limits starting further attempts.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Request deadlines</legend><div class="spa-form-grid">'
+        +field("Total request deadline (ms; blank = default)","feature_request_ms",f.deadlines?.request_ms??"","number","min=0 max=3600000")
+        +field("Per-backend request deadline (ms; blank = default)","feature_backend_ms",f.deadlines?.backend_ms??"","number","min=0 max=3600000")
+        +'</div><p class="form-text">Zero selects the maximum 1-hour deadline. Deadline-aware routes use weighted selection, no WebSocket upgrades or mirroring, and explicit origin URLs.</p></fieldset>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Backend pool</legend>'
+        +'<div data-pool>'+urls.map((u,i)=>poolRow(u,r.weights?.[i]||1)).join("")+'</div>'
         +'<button class="btn btn-sm btn-outline-secondary" type="button" data-operation="pool-add">+ Add backend</button>'
-        +'<div class="form-text">At least one backend URL is required. A pool supports up to 16 URLs.</div></fieldset>'
+        +'<div class="form-text">Proxy routes require a backend URL. A pool supports up to 16 URLs with positive integer weights.</div></fieldset>'
         +'<div class="spa-form-grid">'
         +select("Load balancing","lb_mode",[["round_robin","Round robin"],["least_conn","Least connections"],["ip_hash","Client IP hash"],["cookie","Affinity cookie"]],r.lb_mode)
         +field("Passive failed attempts","max_fails",r.max_fails,"number","min=1 max=20")
         +field("Fail timeout (seconds)","fail_timeout",r.fail_timeout,"number","min=1 max=3600")+'</div>'
-        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Health probe</legend>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Health probe</legend>'
         +check("Enable health probes","health_enabled",r.health_enabled)+'<div class="spa-form-grid">'
         +field("Probe path","health_path",r.health_path)+field("Expected status","health_expect",r.health_expect)
         +field("Interval (seconds)","health_interval",r.health_interval,"number")
@@ -222,14 +336,14 @@
         +select("Per interval","rate_unit",[["s","Second"],["m","Minute"]],r.rate_unit||"m")
         +field("Max request body (blank = site default 4m)","max_body",r.max_body||"","text",'placeholder="512k or 10m"')
         +'</div><p class="form-text">Excess requests return 429; oversized bodies return 413. Rate limiting is per source IP and route.</p></fieldset>'
-        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Allowed HTTP methods</legend>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy rewrite"><legend class="float-none fs-6">Allowed HTTP methods</legend>'
         +'<div class="d-flex align-items-center gap-2 mb-2"><button type="button" class="btn btn-sm btn-outline-secondary" data-operation="methods-all">Select All</button><span class="form-text">Unselected methods return HTTP 405.</span></div>'
         +'<div class="d-flex flex-wrap gap-3" data-route-methods>'
         +["GET","HEAD","POST","PUT","PATCH","DELETE","OPTIONS","TRACE","CONNECT"].map(method=>
           '<label class="spa-check"><input class="form-check-input" type="checkbox" data-route-method value="'+method+'" '
           +((r.methods||"ALL")==="ALL"||String(r.methods).split(",").includes(method)?"checked":"")+'> '+method+'</label>').join("")
         +'</div></fieldset>'
-        +'<fieldset class="border rounded p-3 my-3"><legend class="float-none fs-6">Backend request transformation</legend>'
+        +'<fieldset class="border rounded p-3 my-3" data-route-action-fields="proxy"><legend class="float-none fs-6">Legacy backend request transformation</legend>'
         +check("Enable URL rewrite","rewrite_enabled",r.rewrite_enabled)
         +'<p class="form-text">NGINX regex must begin ^/. Destination must begin /. Captures use $1, $2 etc. Existing query parameters are preserved unless overridden.</p>'
         +'<div class="spa-form-grid">'
@@ -238,10 +352,152 @@
         +textarea("Additional backend X-headers (one X-Name: value per line)","x_headers",r.x_headers,3)
         +'<p class="form-text">Static values only. LiteEdge protects client and forwarding identity headers.</p>'
         +'</fieldset>',route?.id?"Save route":"Add route"));
+    updateRouteActionFields(dialog.querySelector("form"));
+    organizeRouteEditor(dialog.querySelector("form"),!route?.id);
   }
-  function poolRow(url="") {
+  const routeSteps=["Purpose","Destination","Protection","Advanced","Review"];
+  function organizeRouteEditor(form,guided) {
+    form.dataset.routeEditor="1";
+    form.dataset.routeMode=guided?"wizard":"all";
+    form.noValidate=true;
+    const groups=[...form.children].filter(el=>el.tagName==="FIELDSET");
+    const byLegend=label=>groups.find(el=>el.querySelector("legend")?.textContent===label);
+    const grid=[...form.children].filter(el=>el.classList.contains("spa-form-grid"));
+    const footer=form.querySelector('button[type="submit"]').parentElement;
+    const sections=routeSteps.map((name,i)=>{
+      const el=document.createElement("section");el.dataset.routeStep=String(i);
+      el.innerHTML='<h2 class="h5 mt-3">'+name+'</h2>';form.insertBefore(el,footer);return el;
+    });
+    const action=byLegend("Route action"), protocol=action.querySelector('[name="feature_grpc"]'), mode=action.querySelector('[name="feature_action"]');
+    const purpose=document.createElement("div");
+    purpose.innerHTML='<p class="text-secondary">Choose the type of traffic this route handles.</p>'
+      +select("Route purpose","route_purpose",[["proxy","Web application / REST API"],["grpc","gRPC service"],["redirect","URL redirect"],["rewrite","Rewrite and forward"]],protocol.value==="1"?"grpc":mode.value)
+      +'<p class="form-text">TCP, UDP and TLS passthrough are configured separately under transport routes.</p>';
+    sections[0].append(purpose);
+    for(const input of [protocol,mode]){const label=input.closest("label");label.hidden=true;sections[0].append(label);}
+    // Keep original field names and serialization; the selector drives both.
+    const pathGrid=grid[0],timeout=pathGrid.querySelector('[name="timeout"]').closest("label");
+    sections[1].append(pathGrid,action,byLegend("Backend pool"));
+    const headerControls=[action.querySelector('[name="feature_header_ops"]').closest("[data-route-action-fields]"),action.querySelector('[name="feature_response_ops"]').closest("label")];
+    const headerBox=document.createElement("div");headerBox.append(...headerControls);
+    action.dataset.destinationAction="1";
+    const collapse=(section,title,...nodes)=>{
+      const details=document.createElement("details");details.className="spa-route-option border rounded p-3 mb-2";
+      const summary=document.createElement("summary");summary.textContent=title;details.append(summary,...nodes.filter(Boolean));section.append(details);return details;
+    };
+    sections[2].append(byLegend("WAF / route options"));
+    collapse(sections[2],"Traffic limits and client IP restrictions",byLegend("Traffic protection (optional)"));
+    collapse(sections[2],"Allowed HTTP methods",byLegend("Allowed HTTP methods"));
+    collapse(sections[3],"Request matching and listener selection",byLegend("Advanced request matching"));
+    collapse(sections[3],"Header transformations",headerBox);
+    const poolOptions=collapse(sections[3],"Connection and load-balancing settings",timeout,grid[1]);
+    poolOptions.dataset.proxyOption="1";
+    collapse(sections[3],"Backend health monitoring",byLegend("Health probe")).dataset.proxyOption="1";
+    collapse(sections[3],"Verified backend TLS",byLegend("Verified backend TLS")).dataset.tlsOption="1";
+    collapse(sections[3],"Backend retries",byLegend("Backend retries")).dataset.httpOption="1";
+    collapse(sections[3],"Request deadlines",byLegend("Request deadlines")).dataset.httpOption="1";
+    collapse(sections[3],"Request mirroring",byLegend("Request mirroring")).dataset.proxyOnlyOption="1";
+    collapse(sections[3],"Legacy backend transformation",byLegend("Legacy backend request transformation")).dataset.proxyOnlyOption="1";
+    // WAF extras and health probe inputs are only visible when enabled.
+    const waf=byLegend("WAF / route options");
+    const wafExtra=document.createElement("details");wafExtra.dataset.wafExtra="1";wafExtra.className="spa-route-option border rounded p-3 mt-2";wafExtra.innerHTML="<summary>WAF level, exclusions and plugins</summary>";
+    for(const name of ["waf_pl","waf_disabled"])wafExtra.append(waf.querySelector('[name="'+name+'"]').closest("label"));
+    const pluginGroup=waf.querySelector(".mt-2");if(pluginGroup)wafExtra.append(pluginGroup);
+    waf.append(wafExtra);
+    byLegend("Health probe").querySelector(".spa-form-grid").dataset.healthExtra="1";
+    const review=document.createElement("div");review.dataset.routeReview="1";sections[4].append(review);
+    const nav=document.createElement("div");nav.className="spa-route-progress mb-3";nav.dataset.routeProgress="1";
+    form.insertBefore(nav,sections[0]);
+    footer.className="d-flex gap-2 align-items-center flex-wrap mt-3";
+    footer.insertAdjacentHTML("afterbegin",'<button type="button" class="btn btn-outline-secondary" data-operation="wizard-back">Back</button><button type="button" class="btn btn-primary" data-operation="wizard-next">Continue</button>');
+    footer.insertAdjacentHTML("beforeend",'<button type="button" class="btn btn-link ms-auto" data-operation="wizard-mode">Show all settings</button>');
+    if(!guided){
+      for(const details of form.querySelectorAll("details")){
+        const names=[...details.querySelectorAll("[name]")].map(x=>x.name);
+        const meaningful=names.some(name=>{
+          const control=form.querySelector('[name="'+name+'"]');
+          if(control.type==="checkbox")return control.checked&&["health_enabled","rewrite_enabled"].includes(name);
+          return ["feature_headers","feature_queries","feature_header_ops","feature_response_ops","feature_backend_tls_host","feature_backend_tls_peers","feature_mirrors","feature_retry_attempts","feature_request_ms","feature_backend_ms","allow_ips","max_body","waf_disabled"].includes(name)&&!!control.value;
+        });
+        if(meaningful)details.open=true;
+      }
+    }
+    setRouteStep(form,0);
+  }
+  function updateRouteContext(form) {
+    const get=name=>form.querySelector('[name="'+name+'"]');
+    const action=get("feature_action").value, grpc=get("feature_grpc").value==="1", proxy=action!=="redirect";
+    const https=[...form.querySelectorAll("[data-pool-url]")].some(x=>x.value.trim().toLowerCase().startsWith("https://"));
+    const show=(selector,visible)=>{for(const el of form.querySelectorAll(selector))el.hidden=!visible;};
+    show("[data-destination-action]",action!=="proxy");
+    show("[data-waf-extra]",get("waf").checked);
+    show("[data-health-extra]",get("health_enabled").checked);
+    show("[data-proxy-option]",proxy);
+    show("[data-tls-option]",proxy&&(https||!!get("feature_backend_tls_host").value||!!get("feature_backend_tls_peers").value));
+    show("[data-http-option]",proxy&&!grpc);
+    show("[data-proxy-only-option]",action==="proxy"&&!grpc);
+    const rate=get("rate_unit");rate.closest("label").hidden=Number(get("rate_count").value)<=0;
+    for(const name of ["rewrite_pattern","rewrite_replacement"])get(name).closest("label").hidden=!get("rewrite_enabled").checked;
+    for(const [type,path] of [["redirect_path_type","redirect_path"],["typed_rewrite_path_type","typed_rewrite_path"]])get(path).closest("label").hidden=!get(type).value;
+    get("lb_mode").closest("label").hidden=form.querySelectorAll("[data-pool-row]").length<2;
+    for(const name of ["feature_retry_codes","feature_retry_backoff","feature_retry_budget"])get(name).closest("label").hidden=Number(get("feature_retry_attempts").value)<=0;
+    // Incompatible protocol options are excluded, not merely hidden.
+    for(const group of form.querySelectorAll("[data-http-option],[data-proxy-only-option]")){
+      for(const input of group.querySelectorAll("input,select,textarea,button"))input.disabled=group.hidden;
+    }
+    get("feature_queries").disabled=grpc;
+    get("feature_queries").closest("label").hidden=grpc;
+    get("websocket").closest("label").hidden=!proxy||grpc;
+    get("force_https").closest("label").hidden=!proxy||grpc;
+    get("websocket").disabled=!proxy||grpc;
+    get("force_https").disabled=!proxy||grpc;
+  }
+  function setRouteStep(form,step) {
+    form.dataset.routeStepIndex=String(step);
+    const all=form.dataset.routeMode==="all";
+    for(const el of form.querySelectorAll("[data-route-step]"))el.hidden=!all&&Number(el.dataset.routeStep)!==step;
+    form.querySelector("[data-route-progress]").innerHTML=routeSteps.map((name,i)=>'<span class="'+(i===step?"active":"")+'">'+(i+1)+'. '+name+'</span>').join("");
+    form.querySelector('[data-operation="wizard-back"]').hidden=all||step===0;
+    form.querySelector('[data-operation="wizard-next"]').hidden=all||step===4;
+    form.querySelector('button[type="submit"]').hidden=!all&&step!==4;
+    form.querySelector('[data-operation="wizard-mode"]').textContent=all?"Use guided wizard":"Show all settings";
+    if(step===4||all)renderRouteReview(form);
+    updateRouteContext(form);
+  }
+  function renderRouteReview(form) {
+    const get=name=>form.querySelector('[name="'+name+'"]');
+    const target=get("feature_action").value==="redirect"?(get("redirect_scheme").value||"same scheme")+" · "+(get("redirect_host").value||"same host"):( [...form.querySelectorAll("[data-pool-url]")].map(x=>x.value).filter(Boolean).join(", ")||"Not specified");
+    form.querySelector("[data-route-review]").innerHTML='<dl class="spa-review"><dt>Purpose</dt><dd>'+escape(get("route_purpose").selectedOptions[0].textContent)+'</dd><dt>Path</dt><dd>'+escape(get("path").value)+'</dd><dt>Destination</dt><dd>'+escape(target)+'</dd><dt>WAF</dt><dd>'+(get("waf").checked?"Enabled · PL"+escape(get("waf_pl").value):"Disabled")+'</dd><dt>HTTPS redirect</dt><dd>'+(!get("force_https").disabled&&get("force_https").checked?"Enabled":"Off")+'</dd><dt>Health probes</dt><dd>'+(!get("health_enabled").disabled&&get("health_enabled").checked?escape(get("health_path").value)+" every "+escape(get("health_interval").value)+" seconds":"Off")+'</dd></dl><p class="form-text">Saving validates the complete configuration on the appliance before applying it.</p>';
+  }
+  function validateRouteEditor(form,step=null) {
+    for(const input of form.querySelectorAll("input,select,textarea")){
+      if(input.disabled||!input.willValidate||input.validity.valid)continue;
+      const section=input.closest("[data-route-step]");
+      if(step!==null&&Number(section?.dataset.routeStep)!==step)continue;
+      if(section)setRouteStep(form,Number(section.dataset.routeStep));
+      for(let el=input.parentElement;el&&el!==form;el=el.parentElement)if(el.tagName==="DETAILS")el.open=true;
+      input.reportValidity();return false;
+    }
+    if((step===1||step===null)&&form.querySelector('[name="feature_action"]').value!=="redirect"&&[...form.querySelectorAll("[data-pool-url]")].some(x=>!x.value.trim())){
+      setRouteStep(form,1);toast("Enter a backend URL for each destination.","danger");return false;
+    }
+    return true;
+  }
+  function updateRouteActionFields(form) {
+    const action=form.querySelector('select[name="feature_action"]')?.value||"proxy";
+    for(const group of form.querySelectorAll("[data-route-action-fields]")){
+      const active=group.dataset.routeActionFields.split(" ").includes(action);
+      group.hidden=!active;group.style.display=active?"":"none";
+      for(const input of group.querySelectorAll("input,select,textarea,button"))input.disabled=!active;
+    }
+    const https=form.querySelector('input[name="force_https"]');
+    if(https)https.disabled=action==="redirect";
+
+  }
+  function poolRow(url="",weight=1) {
     return '<div class="spa-backend-row" data-pool-row>'
-      +'<input class="form-control font-monospace" data-pool-url type="url" required placeholder="http://app:8080" value="'+escape(url)+'">'
+      +'<input class="form-control font-monospace" data-pool-url type="url" placeholder="http://app:8080" value="'+escape(url)+'">'
+      +'<input class="form-control spa-backend-weight" data-pool-weight type="number" min="1" max="1000000" aria-label="Backend weight" title="Backend weight" value="'+escape(weight)+'">'
       +'<button class="btn btn-sm btn-outline-danger" type="button" data-operation="pool-remove">Remove</button></div>';
   }
 
@@ -254,9 +510,33 @@
       for(const control of group.querySelectorAll("input,select,textarea"))control.disabled=!active;
     }
   }
-  function renderServer(data) {
+  function providerCard(data) {
+    cache.providers=data.providers||[];
+    if(data.unavailable)return card("Kubernetes providers",'<p class="text-secondary">Provider administration is available only through the HTTPS management API.</p>');
+    const rows=cache.providers.map(p=>{
+      const active=(p.hosts||[]).length>0;
+      const actions=p.invalid?[]:[{op:"provider-rotate",label:"Rotate token",data:{id:p.id}},...(!active?[{op:"provider-edit",label:"Edit scope",data:{id:p.id}},{op:"provider-delete",label:"Delete",danger:true,data:{id:p.id}}]:[])];
+      return '<tr><td>'+escape(p.id)+'</td><td>'+escape(p.invalid?"Invalid configuration":p.revision)+'</td><td>'+escape((p.hosts||[]).join(", ")||"None")+'</td><td>'+escape((p.policy?.host_suffixes||[]).join(", ")+(p.policy?.allow_catch_all?" (catch-all)":""))+'</td><td>'+rowActions(actions)+'</td></tr>';
+    }).join("");
+    return card("Kubernetes providers",'<p class="small text-secondary">Provider tokens are scoped to the machine API. Drain owned sites before editing scopes or deleting. Rotation invalidates the previous token immediately; update the controller secret.</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>ID</th><th>Revision</th><th>Owned hosts</th><th>Scope</th><th>Actions</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5">No providers configured.</td></tr>')+'</tbody></table></div>'+rowActions([{op:"provider-create",label:"Add provider"}]));
+  }
+  function providerEditor(p,rotate=false) {
+    const initial={host_suffixes:[],backend_cidrs:[],backend_dns_suffixes:[],min_waf_pl:1,allow_wildcards:false,allow_catch_all:false,allow_catch_all_tls:false,allow_request_mirroring:false,allow_backend_retries:false,allow_backend_tls:false,allow_request_deadlines:false,allow_grpc:false,allow_client_validated_frontend:false,allow_stream:false,stream_ports:{tcp:[],udp:[],tls:[]},extra_http_ports:[],extra_https_ports:[],waf_profiles:{}};
+    const needsToken=!p||rotate;
+    const tokenField=needsToken?field("New token (copy to controller secret before saving)","provider_token","","text","required minlength=43 maxlength=256 autocomplete=off spellcheck=false")+rowActions([{op:"provider-generate-token",label:"Generate secure token"}]):"";
+    modal(rotate?"Rotate provider credential":p?"Edit provider authorization":"Add provider",form(rotate?"provider/rotate":"provider/save",field("Provider ID","provider_id",p?.id||"","text",p?"readonly":"required pattern=[a-z0-9][a-z0-9-]{0,62}")+tokenField+(rotate?'<p class="text-warning">The previous token will stop working immediately. Existing routes are retained.</p>':textarea("Authorization policy (JSON; DNS suffixes, backend CIDRs, WAF profiles)", "policy_json",JSON.stringify(p?.policy||initial,null,2),14)),rotate?"Rotate token":"Save provider"));
+  }
+  function transportCard(data){
+    if(!data||data.unavailable)return card("Transport routes",'<p class="text-secondary">Transport inventory unavailable.</p>');
+    const rows=(data.routes||[]).map(r=>'<tr><td>'+escape(r.protocol.toUpperCase())+'</td><td>'+escape(r.port)+'</td><td>'+escape(r.hostname||"—")+'</td><td>'+escape(r.backends.map(b=>b.target+" × "+b.weight).join(", "))+'</td><td>'+escape(r.owner==="_native"?"Native":r.owner)+'</td></tr>').join("");
+    const native=(data.routes||[]).filter(r=>r.owner==="_native").map(({owner,...route})=>route);
+    return card("TCP, UDP and TLS passthrough",'<p class="small text-warning">Layer-4 traffic is not inspected by the HTTP WAF. TLS is terminated at the backend. Only operator-provisioned ports can be used.</p><p>Provisioned listeners: '+escape((data.listeners||[]).map(r=>r.protocol+":"+r.port+" → "+r.bind).join(", ")||"None")+'</p><div class="table-responsive"><table class="table table-sm"><thead><tr><th>Protocol</th><th>Port</th><th>SNI hostname</th><th>Backends / weights</th><th>Owner</th></tr></thead><tbody>'+(rows||'<tr><td colspan="5">No transport routes configured.</td></tr>')+'</tbody></table></div>'+form("stream/save",textarea("Native transport routes (JSON array; managed routes are read-only)","streams_json",JSON.stringify(native,null,2),10),"Save native transport routes"));
+  }
+  function renderServer(data,providers,transport) {
     const v=data.settings||{},c=data.collector||{};
     root.innerHTML='<h1 class="h3 mb-3">Server Settings</h1>'
+      +providerCard(providers)
+      +transportCard(transport)
       +card("NGINX defaults",form("server/save",'<div class="spa-form-grid">'
         +field("Worker connections","worker_connections",v.worker_connections||"1024","number")
         +field("Keepalive timeout","keepalive_timeout",v.keepalive_timeout||"65","number")
@@ -514,6 +794,7 @@
   }
   function logQuery(form) {
     const values=Object.fromEntries(new FormData(form).entries());
+    delete values.route_purpose;
     // The server validates each host, alias and route against its inventory.
     const hosts=[...form.querySelectorAll("[data-log-host]:checked")];
     const routes=[...form.querySelectorAll("[data-log-route]:checked")];
@@ -555,26 +836,95 @@
       +(kind==="site"||kind==="sites"?check("Include certificates","certificates",false):"")
       +'<button class="btn btn-primary mt-3" type="submit">Import</button></form>');
   }
-  function exportDialog() {
+  async function exportDialog() {
+    const sites=(await api("site-inventory")).sites;
     modal("Export configuration",'<div class="d-flex flex-wrap gap-2">'
       +rowActions([{op:"export-all",label:"All sites (settings)"},{op:"export-all-certs",label:"All sites + certificates"}])+'</div>'
-      +'<div class="mt-3">'+select("Single site","export_site",cache.sites.map(s=>[s.host,s.host]),cache.sites[0]?.host)
+      +'<div class="mt-3">'+select("Single site","export_site",sites.map(s=>[s.host,s.host]),sites[0]?.host)
       +rowActions([{op:"export-selected-site",label:"Export selected site"}])+'</div>');
   }
 
   function formValues(form) {
     const values=Object.fromEntries(new FormData(form).entries());
-    if(form.querySelector("[data-route-methods]")){
+    delete values.route_purpose;
+    if(form.querySelector("[data-route-methods]")&&values.feature_action!=="redirect"){
       const chosen=[...form.querySelectorAll("[data-route-method]:checked")].map(x=>x.value);
       if(!chosen.length)throw new Error("Select at least one HTTP method.");
       values.methods=chosen.length===9?"ALL":chosen.join(",");
     }
     if(form.querySelector("[data-pool]")){
-      const urls=[...form.querySelectorAll("[data-pool-url]")].map(x=>x.value.trim());
-      if(!urls.length||urls.some(url=>!url))throw new Error("A route needs at least one valid backend URL.");
-      if(urls.length>16)throw new Error("A route supports at most 16 backends.");
-      values.target=urls[0];
-      values.backends=urls.slice(1).join(",");
+      const parseMatches=raw=>String(raw||"").split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{
+        const i=line.indexOf("=");if(i<1)throw new Error("Match entries must be name=value.");
+        return {name:line.slice(0,i).trim(),value:line.slice(i+1).trim()};
+      });
+      const parseOps=raw=>String(raw||"").split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{
+        const m=/^(set|add|remove) +([^= ]+)(?:=(.*))?$/.exec(line);
+        if(!m)throw new Error("Header operations must be set/add X-Name=value or remove X-Name.");
+        return {op:m[1],name:m[2],value:m[3]||""};
+      });
+      const f={schemes:String(values.feature_schemes||"http,https").split(",").map(x=>x.trim()),method:values.feature_method||"",precedence:Number(values.feature_precedence||0),
+        header_matches:parseMatches(values.feature_headers),query_matches:parseMatches(values.feature_queries),request_headers:parseOps(values.feature_header_ops),response_headers:parseOps(values.feature_response_ops)};
+      if(f.schemes.length>18||new Set(f.schemes).size!==f.schemes.length||f.schemes.some(s=>s!=="http"&&s!=="https"&&(!/^https?:[1-9][0-9]{0,4}$/.test(s)||Number(s.split(":")[1])>65535||[80,443,9443].includes(Number(s.split(":")[1])))))throw new Error("Invalid listener list. Use http, https, or a provisioned http:port/https:port.");
+      if(values.feature_action!=="redirect"){
+        const deadlines={};
+        for(const [key,value] of [["request_ms",values.feature_request_ms],["backend_ms",values.feature_backend_ms]]){
+          if(value!==undefined&&value!==""){const n=Number(value);if(!Number.isInteger(n)||n<0||n>3600000)throw new Error("Invalid request deadline.");deadlines[key]=n;}
+        }
+        if(deadlines.request_ms>0&&deadlines.backend_ms>deadlines.request_ms)throw new Error("Backend deadline exceeds request deadline.");
+        if(Object.keys(deadlines).length)f.deadlines=deadlines;
+      }
+      if(values.feature_action!=="redirect"&&values.feature_retry_attempts!==undefined&&values.feature_retry_attempts!==""){
+        const attempts=Number(values.feature_retry_attempts),codes=String(values.feature_retry_codes||"").split(",").map(x=>x.trim()).filter(Boolean).map(Number),budget=Number(values.feature_retry_budget||0),backoff=Number(values.feature_retry_backoff||0);
+        if(!Number.isInteger(attempts)||attempts<0||attempts>4||codes.some(c=>![429,500,502,503,504].includes(c))||new Set(codes).size!==codes.length||!Number.isInteger(budget)||budget<0||budget>60000||!Number.isInteger(backoff)||backoff<0||backoff>60000||(!attempts&&(codes.length||budget||backoff)))throw new Error("Invalid backend retry policy.");
+        f.retry={attempts,codes,budget_ms:budget};if(backoff)f.retry.backoff_ms=backoff;
+      }
+      if(values.feature_action==="redirect"){
+        f.redirect={hostname:values.redirect_host||"",scheme:values.redirect_scheme||"",port:Number(values.redirect_port||0),status_code:Number(values.redirect_status||302)};
+        if(values.redirect_path_type)f.redirect.path={type:values.redirect_path_type,value:values.redirect_path};
+        values.target="";values.backends="";values.backend_weights="";
+        values.force_https="0";values.health_enabled="0";values.rewrite_enabled="0";values.x_headers="";values.methods="ALL";
+      }else{
+        const urls=[...form.querySelectorAll("[data-pool-url]")].map(x=>x.value.trim());
+        const weights=[...form.querySelectorAll("[data-pool-weight]")].map(x=>Number(x.value));
+        if(!urls.length||urls.some(url=>!url))throw new Error("A proxy route needs at least one valid backend URL.");
+        if(urls.length>16)throw new Error("A route supports at most 16 backends.");
+        if(weights.some(w=>!Number.isInteger(w)||w<1||w>1000000))throw new Error("Backend weights must be positive integers.");
+        const tlsHost=String(values.feature_backend_tls_host||"").trim(),tlsCA=String(values.feature_backend_tls_ca||"").trim();
+        const rawPeers=String(values.feature_backend_tls_peers||"").trim();
+        if(rawPeers){
+          let peers;try{peers=JSON.parse(rawPeers);}catch{throw new Error("Invalid independent TLS peer JSON.");}
+          if(!peers||typeof peers!=="object"||Array.isArray(peers)||!Object.keys(peers).length||tlsHost||tlsCA)throw new Error("Use either common or independent TLS peer trust.");
+          const https=urls.filter(u=>u.startsWith("https://"));
+          if(https.length!==Object.keys(peers).length||https.some(u=>!peers[u]||typeof peers[u].hostname!=="string"||!peers[u].hostname||typeof peers[u].ca_certificate!=="string"||!peers[u].ca_certificate))throw new Error("Every HTTPS peer requires its own TLS trust entry.");
+          f.backend_tls_peers=peers;
+        }
+        if(tlsHost||tlsCA){
+          if(!tlsHost||!tlsCA||urls.some(u=>!/^https:\/\/[a-z0-9.-]+:[1-9][0-9]{0,4}$/.test(u)))throw new Error("Verified backend TLS needs a DNS identity, CA bundle and HTTPS origins with explicit ports.");
+          f.backend_tls={hostname:tlsHost,ca_certificate:tlsCA+"\n"};
+        }
+        values.target=urls[0];values.backends=urls.slice(1).join(",");
+        values.backend_weights=weights.every(x=>x===1)?"":weights.join(",");
+        if(values.feature_action==="proxy"){
+          f.mirrors=String(values.feature_mirrors||"").split("\n").map(x=>x.trim()).filter(Boolean).map(line=>{
+            const [target,percentage,...extra]=line.split("|").map(x=>x.trim());
+            const basis=percentage===undefined?10000:Math.round(Number(percentage)*100);
+            if(extra.length||(percentage!==undefined&&!/^\d{1,3}(?:\.\d{1,2})?$/.test(percentage))||!Number.isInteger(basis)||basis<0||basis>10000)throw new Error("Mirror percentage must be 0–100 (up to two decimals).");
+            return {target,basis_points:basis};
+          });
+          if(f.mirrors.length>4)throw new Error("At most four mirror destinations.");
+        }
+        if(values.feature_action==="rewrite"){
+          values.rewrite_enabled="0";values.x_headers="";
+          f.rewrite={hostname:values.rewrite_host||""};
+          if(values.typed_rewrite_path_type)f.rewrite.path={type:values.typed_rewrite_path_type,value:values.typed_rewrite_path};
+        }
+      }
+      if(values.feature_grpc==="1"){
+        if(values.feature_action!=="proxy"||f.deadlines||f.retry||f.mirrors?.length||f.backend_tls_peers||f.query_matches?.length)throw new Error("gRPC requires proxy mode without HTTP-only features.");
+        f.grpc=true;f.method="POST";values.force_https="0";values.websocket="0";
+      }
+      values.features_json=JSON.stringify(f);
+      for(const k of Object.keys(values))if(k.startsWith("feature_")||k.startsWith("redirect_")||k.startsWith("typed_rewrite_")||k==="rewrite_host")delete values[k];
     }
     if(form.dataset.apiAction==="alerts/save"){
       const hosts=[...form.querySelectorAll("[data-alert-host]:checked")];
@@ -595,6 +945,7 @@
     try {
       const result=await act(name,data);
       if(dialog.open)dialog.close();
+      if(name.startsWith("provider/"))dialog.innerHTML="";
       toast("Saved successfully.");
       if(result.reauthenticate) {
         toast("Password changed. Your next API request will require new credentials.");
@@ -610,6 +961,17 @@
     const host=el.dataset.host||cache.site?.host;
     const id=el.dataset.id;
     switch(op){
+      case "provider-create":providerEditor(null);break;
+      case "provider-edit":providerEditor(cache.providers.find(p=>p.id===id));break;
+      case "provider-rotate":providerEditor(cache.providers.find(p=>p.id===id),true);break;
+      case "provider-generate-token": {
+        const input=el.closest("form").querySelector("[name=provider_token]");
+        input.value=Array.from(crypto.getRandomValues(new Uint8Array(32)),v=>v.toString(16).padStart(2,"0")).join("");
+        input.select();break;
+      }
+      case "provider-delete":
+        if(!confirm("Delete drained provider "+id+"?"))return;
+        await act("provider/delete",{provider_id:id});toast("Provider deleted.");await refresh();break;
       case "full-backup-download":
         await transfer("backup/export","liteedge-full-backup.tar.gz");
         toast("Full backup downloaded. Store it securely; it contains private keys and authentication data.");
@@ -632,9 +994,21 @@
       case "delete-site":
         if(!confirm("Delete site "+host+" and its saved configuration?"))return;
         await act("site/delete",{host});toast("Site deleted.");await refresh();break;
-      case "add-route":await editRoute();break;
+      case "site-tab":await siteTab(el.dataset.tab);break;
+      case "wizard-back": {const f=el.closest("form");setRouteStep(f,Math.max(0,Number(f.dataset.routeStepIndex)-1));break;}
+      case "wizard-next": {const f=el.closest("form"),step=Number(f.dataset.routeStepIndex);if(validateRouteEditor(f,step))setRouteStep(f,Math.min(4,step+1));break;}
+      case "wizard-mode": {const f=el.closest("form");f.dataset.routeMode=f.dataset.routeMode==="all"?"wizard":"all";setRouteStep(f,Number(f.dataset.routeStepIndex));break;}
+      case "add-route":if(!cache.site?.provider)await editRoute();break;
       case "edit-route":
-        await editRoute(cache.site.routes.find(r=>r.id===id));break;
+      case "view-route": {
+        const data=await api("route-detail?host="+q(host)+"&id="+q(id));
+        if(current().host!==host)return;
+        if(data.provider||op==="view-route"){
+          const r=data.route;
+          modal("Route details · "+r.path,'<p class="text-secondary">Read-only configuration</p><p><strong>Destination:</strong> '+escape(backendSummary(r))+'</p><p><strong>Match:</strong> '+escape(r.match)+' · <strong>WAF:</strong> '+escape(r.waf==="1"?"Enabled · PL"+r.waf_pl:"Disabled")+'</p>'+featureSummary(r));
+        }else await editRoute(data.route);
+        break;
+      }
       case "delete-route":
         if(!confirm("Delete this route?"))return;
         await act("route/delete",{host,id});toast("Route deleted.");await refresh();break;
@@ -646,12 +1020,14 @@
         if(pool.children.length>=16){toast("Maximum 16 backends.","danger");return;}
         pool.insertAdjacentHTML("beforeend",poolRow());
         pool.lastElementChild.querySelector("input").focus();
+        updateRouteContext(el.closest("form"));
         break;
       }
       case "pool-remove":{
         const pool=el.closest("[data-pool]");
         el.closest("[data-pool-row]").remove();
         if(!pool.children.length)pool.insertAdjacentHTML("beforeend",poolRow());
+        updateRouteContext(pool.closest("form"));
         break;
       }
       case "selfsigned":await act("cert/selfsigned",{host});toast("Certificate created.");await refresh();break;
@@ -716,7 +1092,7 @@
       case "owasp-import":uploadDialog("owasp");break;
       case "owasp-crs-import":uploadDialog("owasp-crs");break;
       case "owasp-export":await transfer("owasp/export","owasp-config.tar.gz");break;
-      case "export":exportDialog();break;
+      case "export":await exportDialog();break;
       case "export-site":await transfer("export?scope=site&host="+q(host)+"&certificates=0",host+"-settings.tar.gz");break;
       case "export-site-certs":await transfer("export?scope=site&host="+q(host)+"&certificates=1",host+"-with-certificates.tar.gz");break;
       case "export-selected-site":{
@@ -741,6 +1117,22 @@
     }
   }
   document.addEventListener("change",event=>{
+    const editor=event.target.closest("form[data-route-editor]");
+    if(editor){
+      if(event.target.name==="route_purpose"){
+        const purpose=event.target.value;
+        editor.querySelector('[name="feature_action"]').value=purpose==="grpc"?"proxy":purpose;
+        editor.querySelector('[name="feature_grpc"]').value=purpose==="grpc"?"1":"0";
+        updateRouteActionFields(editor);
+      }
+      updateRouteContext(editor);
+      if(editor.dataset.routeMode==="all")renderRouteReview(editor);
+      return;
+    }
+    if(event.target.matches('select[name="feature_action"]')){
+      updateRouteActionFields(event.target.closest("form"));
+      return;
+    }
     if(event.target.matches('form[data-api-action="collector/save"] select[name="mode"]')){
       updateExporterFields(event.target.closest("form"));
       return;
@@ -752,6 +1144,8 @@
     cache.filters=logQuery(form);
   });
   document.addEventListener("input",event=>{
+    const editor=event.target.closest("form[data-route-editor]");
+    if(editor){updateRouteContext(editor);if(editor.dataset.routeMode==="all")renderRouteReview(editor);return;}
     const search=event.target.closest("[data-log-picker-search]");
     if(search){
       const form=search.closest("[data-log-search]");
@@ -855,6 +1249,10 @@
       return;
     }
     if(formEl.dataset.apiAction){
+      if(formEl.dataset.routeEditor){
+        if(formEl.dataset.routeMode==="wizard"&&Number(formEl.dataset.routeStepIndex)!==4)return;
+        if(!validateRouteEditor(formEl))return;
+      }
       try{await mutation(formEl);}catch(err){toast(err.message||String(err),"danger");}
     }
   });

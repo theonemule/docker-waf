@@ -24,10 +24,14 @@ cat > /tmp/release/opt/liteedge/entrypoint.sh <<'ENTRY'
 exit 0
 ENTRY
 echo '# new init' >/tmp/release/opt/liteedge/share/openrc/liteedge
-echo 'LiteEdge=3.1.6' >/tmp/release/opt/liteedge/VERSION
+echo 'LiteEdge=3.3.0' >/tmp/release/opt/liteedge/VERSION
 chmod +x /tmp/release/opt/liteedge/{sbin/nginx,entrypoint.sh}
 tar -czf /tmp/assets/liteedge-linux-musl-x86_64.tar.gz -C /tmp/release opt/liteedge
 (cd /tmp/assets && sha256sum liteedge-linux-musl-x86_64.tar.gz > liteedge-linux-musl-x86_64.tar.gz.sha256)
+cat > /tmp/mocks/python3 <<'PYTHON'
+#!/usr/bin/env bash
+exit 0
+PYTHON
 cat > /tmp/mocks/apk <<'APK'
 #!/usr/bin/env bash
 exit 0
@@ -43,7 +47,7 @@ case "$2" in
   status) test -e /tmp/service-running ;;
   stop) rm -f /tmp/service-running ;;
   start)
-    if [[ "${FAIL_NEW:-0}" == 1 ]] && grep -qx 'LiteEdge=3.1.6' /opt/liteedge/VERSION; then exit 2; fi
+    if [[ "${FAIL_NEW:-0}" == 1 ]] && grep -qx 'LiteEdge=3.3.0' /opt/liteedge/VERSION; then echo changed >/var/lib/liteedge/sentinel; touch /var/lib/liteedge/new-state; exit 2; fi
     touch /tmp/service-running ;;
   *) exit 90 ;;
 esac
@@ -67,8 +71,9 @@ chmod +x /tmp/mocks/*
 export PATH="/tmp/mocks:$PATH"
 touch /tmp/service-running
 bash /tmp/upgrade-liteedge.sh --mode alpine
-grep -qx 'LiteEdge=3.1.6' /opt/liteedge/VERSION
+grep -qx 'LiteEdge=3.3.0' /opt/liteedge/VERSION
 grep -qx 'KEEP-THE-PERSISTENT-DATA' /var/lib/liteedge/sentinel
+test ! -e /var/lib/liteedge/new-state
 grep -qx 'KEEP-THE-USER-CONFIG' /etc/conf.d/liteedge
 grep -qx '# new init' /etc/init.d/liteedge
 test -f /tmp/service-running
@@ -86,6 +91,7 @@ grep -qx 'LiteEdge=3.1.4' /opt/liteedge/VERSION
 grep -qx '# prior init' /etc/init.d/liteedge
 test -f /tmp/service-running
 grep -qx 'KEEP-THE-PERSISTENT-DATA' /var/lib/liteedge/sentinel
+test ! -e /var/lib/liteedge/new-state
 grep -qx 'KEEP-THE-USER-CONFIG' /etc/conf.d/liteedge
 printf '%s\n' 'deadbeef  liteedge-linux-musl-x86_64.tar.gz' >/tmp/assets/liteedge-linux-musl-x86_64.tar.gz.sha256
 if bash /tmp/upgrade-liteedge.sh --mode alpine >/dev/null 2>&1; then

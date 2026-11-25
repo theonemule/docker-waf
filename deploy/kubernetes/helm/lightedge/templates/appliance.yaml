@@ -1,0 +1,286 @@
+{{- if .Values.appliance.enabled }}
+{{- $ha := .Values.appliance.ha.enabled }}
+{{- $portMappings := list }}
+{{- $tlsPortMappings := list }}
+{{- $public := dict "80" true "443" true "9443" true }}
+{{- $bind := dict "8080" true "8443" true "9443" true }}
+{{- if gt (add (len .Values.appliance.extraHTTPPorts) (len .Values.appliance.extraHTTPSPorts)) 16 }}{{ fail "At most 16 extra listener ports" }}{{ end }}
+{{- range .Values.appliance.extraHTTPPorts }}
+  {{- $p := int .port }}
+  {{- $b := int .targetPort }}
+  {{- if or (lt $p 1) (gt $p 65535) (lt $b 1024) (gt $b 65535) (hasKey $public (toString $p)) (hasKey $bind (toString $b)) }}{{ fail "Invalid or conflicting extra HTTP listener port mapping" }}{{ end }}
+  {{- $_ := set $public (toString $p) true }}
+  {{- $_ := set $bind (toString $b) true }}
+  {{- $portMappings = append $portMappings (printf "%d:%d" $p $b) }}
+{{- end }}
+{{- range .Values.appliance.extraHTTPSPorts }}
+  {{- $p := int .port }}
+  {{- $b := int .targetPort }}
+  {{- if or (lt $p 1) (gt $p 65535) (lt $b 1024) (gt $b 65535) (hasKey $public (toString $p)) (hasKey $bind (toString $b)) }}{{ fail "Invalid or conflicting extra HTTPS listener port mapping" }}{{ end }}
+  {{- $_ := set $public (toString $p) true }}
+  {{- $_ := set $bind (toString $b) true }}
+  {{- $tlsPortMappings = append $tlsPortMappings (printf "%d:%d" $p $b) }}
+{{- end }}
+{{- $transport := dict "tcp" .Values.appliance.extraTCPPorts "udp" .Values.appliance.extraUDPPorts "tls" .Values.appliance.extraTLSPorts }}
+{{- $streamMappings := dict }}
+{{- if gt (add (len .Values.appliance.extraTCPPorts) (len .Values.appliance.extraUDPPorts) (len .Values.appliance.extraTLSPorts)) 16 }}{{ fail "At most 16 transport listener ports" }}{{ end }}
+{{- range $protocol, $entries := $transport }}
+  {{- $mapping := list }}
+  {{- range $entries }}
+    {{- $p := int .port }}
+    {{- $b := int .targetPort }}
+    {{- if or (lt $p 1) (gt $p 65535) (lt $b 1024) (gt $b 65535) (hasKey $public (toString $p)) (hasKey $bind (toString $b)) }}{{ fail "Invalid or conflicting transport listener mapping" }}{{ end }}
+    {{- $_ := set $public (toString $p) true }}
+    {{- $_ := set $bind (toString $b) true }}
+    {{- $mapping = append $mapping (printf "%d:%d" $p $b) }}
+  {{- end }}
+  {{- $_ := set $streamMappings $protocol (join "," $mapping) }}
+{{- end }}
+{{- if $ha }}
+{{- if lt (int .Values.appliance.ha.replicas) 2 }}{{ fail "shared HA requires at least two appliance replicas" }}{{ end }}
+{{- if not .Values.appliance.ha.existingClaim }}{{ fail "shared HA requires an existing RWX configuration claim" }}{{ end }}
+{{- if not .Values.appliance.ha.keySecret }}{{ fail "shared HA requires an existing HMAC key Secret" }}{{ end }}
+{{- else }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "lightedge.appliance" . }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.appliance.storage.storageClass }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.appliance.storage.size }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: {{ if $ha }}StatefulSet{{ else }}Deployment{{ end }}
+metadata:
+  name: {{ include "lightedge.appliance" . }}
+spec:
+  {{- if $ha }}
+  replicas: {{ .Values.appliance.ha.replicas }}
+  serviceName: {{ include "lightedge.appliance" . }}-members
+  podManagementPolicy: Parallel
+  {{- else }}
+  replicas: 1
+  strategy: {type: Recreate}
+  {{- end }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lightedge-appliance
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lightedge-appliance
+        app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    spec:
+      automountServiceAccountToken: false
+      {{- if and $ha .Values.appliance.ha.requireDistinctNodes }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: lightedge-appliance
+                  app.kubernetes.io/instance: {{ .Release.Name | quote }}
+              topologyKey: kubernetes.io/hostname
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: provision
+          image: {{ .Values.appliance.image | quote }}
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              umask 077
+              mkdir -p /data/certs/_admin /data/providers
+              install -m 644 /admin-tls/tls.crt /data/certs/_admin/fullchain.pem
+              install -m 600 /admin-tls/tls.key /data/certs/_admin/privkey.pem
+              install -m 600 /provider/provider.json "/data/providers/$PROVIDER_ID.json"
+          env:
+            - name: PROVIDER_ID
+              value: {{ .Values.provider.id | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: admin-tls, mountPath: /admin-tls, readOnly: true}
+            - {name: provider-config, mountPath: /provider, readOnly: true}
+      containers:
+        - name: appliance
+          image: {{ .Values.appliance.image | quote }}
+          env:
+            - name: LITEEDGE_EXTRA_HTTP_PORTS
+              value: {{ join "," $portMappings | quote }}
+            - name: LITEEDGE_EXTRA_HTTPS_PORTS
+              value: {{ join "," $tlsPortMappings | quote }}
+            {{- range $protocol, $mapping := $streamMappings }}
+            - name: LITEEDGE_EXTRA_{{ upper $protocol }}_PORTS
+              value: {{ $mapping | quote }}
+            {{- end }}
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.appliance.adminSecret }}
+                  key: password
+            {{- if $ha }}
+            - name: LITEEDGE_HA_DIR
+              value: /ha
+            - name: LITEEDGE_HA_NODE_ID
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            - name: LITEEDGE_HA_KEY_FILE
+              value: /ha-key/key
+            - name: LITEEDGE_HA_BOOTSTRAP
+              value: {{ ternary "1" "0" .Values.appliance.ha.bootstrap | quote }}
+            {{- end }}
+          ports:
+            - {name: http, containerPort: 8080}
+            - {name: https, containerPort: 8443}
+            - {name: admin, containerPort: 9443}
+            {{- range .Values.appliance.extraHTTPPorts }}
+            - {name: http-{{ int .port }}, containerPort: {{ int .targetPort }}}
+            {{- end }}
+            {{- range .Values.appliance.extraHTTPSPorts }}
+            - {name: https-{{ int .port }}, containerPort: {{ int .targetPort }}}
+            {{- end }}
+            {{- range $protocol, $entries := $transport }}
+            {{- range $entries }}
+            - {name: {{ $protocol }}-{{ int .port }}, containerPort: {{ int .targetPort }}, protocol: {{ ternary "UDP" "TCP" (eq $protocol "udp") }}}
+            {{- end }}
+            {{- end }}
+          livenessProbe:
+            tcpSocket: {port: admin}
+          readinessProbe:
+            {{- if $ha }}
+            exec:
+              command: [python3, /opt/liteedge/bin/ha_config.py, ready]
+            periodSeconds: 2
+            failureThreshold: 1
+            {{- else }}
+            tcpSocket: {port: admin}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          volumeMounts:
+            - {name: data, mountPath: /data}
+            - {name: tmp, mountPath: /tmp}
+            {{- if $ha }}
+            - {name: shared-config, mountPath: /ha}
+            - {name: ha-key, mountPath: /ha-key, readOnly: true}
+            {{- end }}
+      volumes:
+        {{- if $ha }}
+        - name: shared-config
+          persistentVolumeClaim:
+            claimName: {{ .Values.appliance.ha.existingClaim | quote }}
+        - name: ha-key
+          secret:
+            secretName: {{ .Values.appliance.ha.keySecret | quote }}
+            defaultMode: 0440
+        {{- else }}
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "lightedge.appliance" . }}
+        {{- end }}
+        - name: tmp
+          emptyDir: {}
+        - name: admin-tls
+          secret:
+            secretName: {{ .Values.appliance.adminTLSSecret }}
+            defaultMode: 0440
+        - name: provider-config
+          secret:
+            secretName: {{ .Values.provider.credentialsSecret }}
+            defaultMode: 0440
+            items:
+              - {key: provider.json, path: provider.json}
+  {{- if $ha }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        {{- with .Values.appliance.storage.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.appliance.storage.size }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "lightedge.appliance" . }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lightedge-appliance
+      app.kubernetes.io/instance: {{ .Release.Name | quote }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lightedge.appliance" . }}-members
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app.kubernetes.io/name: lightedge-appliance
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  ports:
+    - {name: admin, port: 9443, targetPort: admin}
+  {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lightedge.appliance" . }}
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: lightedge-appliance
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  ports:
+    - {name: admin, port: 9443, targetPort: admin}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "lightedge.appliance" . }}-public
+spec:
+  type: {{ .Values.appliance.serviceType }}
+  selector:
+    app.kubernetes.io/name: lightedge-appliance
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+  ports:
+    - {name: http, port: 80, targetPort: http}
+    - {name: https, port: 443, targetPort: https}
+    {{- range .Values.appliance.extraHTTPPorts }}
+    - {name: http-{{ int .port }}, port: {{ int .port }}, targetPort: http-{{ int .port }}}
+    {{- end }}
+    {{- range .Values.appliance.extraHTTPSPorts }}
+    - {name: https-{{ int .port }}, port: {{ int .port }}, targetPort: https-{{ int .port }}}
+    {{- end }}
+    {{- range $protocol, $entries := $transport }}
+    {{- range $entries }}
+    - {name: {{ $protocol }}-{{ int .port }}, port: {{ int .port }}, targetPort: {{ $protocol }}-{{ int .port }}, protocol: {{ ternary "UDP" "TCP" (eq $protocol "udp") }}}
+    {{- end }}
+    {{- end }}
+{{- end }}

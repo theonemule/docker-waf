@@ -34,6 +34,7 @@ git -C "$SRC/ModSecurity" submodule update --init --recursive --depth 1
 )
 echo "[2/6] ModSecurity-nginx ${MODSECURITY_NGINX_VERSION}"
 fetch_git https://github.com/owasp-modsecurity/ModSecurity-nginx.git "$MODSECURITY_NGINX_COMMIT" "$SRC/ModSecurity-nginx"
+git -C "$SRC/ModSecurity-nginx" apply "$ROOT/build/patches/modsecurity-nginx-shared-rules.patch"
 echo "[3/6] NGINX ${NGINX_VERSION}"
 curl -fsSL "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" -o "$WORK/nginx.tar.gz"
 echo "${NGINX_SHA256}  $WORK/nginx.tar.gz" | sha256sum -c -
@@ -58,6 +59,8 @@ tar -xzf "$WORK/nginx.tar.gz" -C "$SRC"
     --with-file-aio \
     --with-http_ssl_module \
     --with-http_v2_module \
+    --with-stream \
+    --with-stream_ssl_preread_module \
     --with-http_realip_module \
     --with-http_gzip_static_module \
     --with-http_stub_status_module \
@@ -90,6 +93,7 @@ sed -i \
   "$PREFIX/etc/modsecurity/modsecurity.conf.template"
 printf '\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogParts AFHZ\nSecAuditEngine RelevantOnly\nSecTmpDir @RUN_DIR@\nSecDataDir @RUN_DIR@\n' >> "$PREFIX/etc/modsecurity/modsecurity.conf.template"
 cp -a "$ROOT/bin/." "$PREFIX/bin/"
+CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$PREFIX/bin/deadline-proxy" "$ROOT/runtime/deadline/main.go"
 cp -a "$ROOT/cgi/." "$PREFIX/cgi/"
 cp -a "$ROOT/ui/." "$PREFIX/ui/"
 curl -fsSL --retry 3 "https://cdn.jsdelivr.net/npm/bootstrap@${BOOTSTRAP_VERSION}/dist/css/bootstrap.min.css" -o "$PREFIX/ui/bootstrap.min.css"
@@ -106,7 +110,8 @@ chmod 0755 "$PREFIX"/bin/*.py "$PREFIX"/bin/*.sh "$PREFIX"/cgi/*.sh "$PREFIX"/en
 install -d -m 0755 "$PREFIX/share/openrc"
 install -m 0755 "$ROOT/packaging/openrc/liteedge" "$PREFIX/share/openrc/liteedge"
 install -m 0755 "$ROOT/scripts/install-alpine.sh" "$PREFIX/share/install-alpine.sh"
-install -m 0755 "$ROOT/scripts/upgrade-liteedge.sh" "$PREFIX/share/upgrade-liteedge.sh"
+sed "s/^VERSION=v[0-9][0-9.]*/VERSION=v$VERSION/" "$ROOT/scripts/upgrade-liteedge.sh" > "$PREFIX/share/upgrade-liteedge.sh"
+chmod 0755 "$PREFIX/share/upgrade-liteedge.sh"
 install -m 0644 "$ROOT/registry/crs-plugin-registry.tsv" "$PREFIX/share/crs-plugin-registry.tsv"
 install -m 0644 "$ROOT/registry/crs-rule-parser.awk" "$PREFIX/share/crs-rule-parser.awk"
 install -m 0644 "$ROOT/license.txt" "$PREFIX/licenses/LiteEdge.txt"
@@ -159,11 +164,13 @@ EOF_RUNTIME
   cat "$ROOT/build/versions.env"
   echo "LITEEDGE_VERSION=$VERSION"
   echo "ARCH=$ARCH"
+  printf "MODSECURITY_SHARED_RULES_PATCH_SHA256=%s\n" "$(sha256sum "$ROOT/build/patches/modsecurity-nginx-shared-rules.patch" | cut -d' ' -f1)"
 } > "$PREFIX/BUILD-MANIFEST"
 echo "[6/6] validating and packaging"
 export LD_LIBRARY_PATH="$PREFIX/lib"
 "$PREFIX/sbin/nginx" -V 2>&1 | tee "$PREFIX/NGINX-BUILD.txt"
 grep -q -- '--add-module=.*/ModSecurity-nginx' "$PREFIX/NGINX-BUILD.txt" || { echo "NGINX build does not show the ModSecurity connector." >&2; exit 1; }
+grep -aq 'modsecurity_rules_file_shared' "$PREFIX/sbin/nginx" || { echo "NGINX build lacks the shared ruleset connector capability." >&2; exit 1; }
 ldd "$PREFIX/lib/libmodsecurity.so.3" | tee "$PREFIX/MODSECURITY-LDD.txt"
 grep -Eq 'liblua-5\.3\.so' "$PREFIX/MODSECURITY-LDD.txt" || { echo "ModSecurity build does not link Lua 5.3." >&2; exit 1; }
 echo 'Lua=5.3' >> "$PREFIX/VERSION"

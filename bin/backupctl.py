@@ -229,9 +229,8 @@ def reload_config():
     subprocess.run(['/opt/liteedge/sbin/nginx', '-t', '-c',
                     str(Path(os.environ.get('DATA_DIR', '/data'))/'nginx/nginx.conf')],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    subprocess.run(['/opt/liteedge/sbin/nginx', '-s', 'reload', '-c',
-                    str(Path(os.environ.get('DATA_DIR', '/data'))/'nginx/nginx.conf')],
-                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    from nginx_reload import reload as confirmed_reload
+    confirmed_reload('/opt/liteedge/sbin/nginx', Path(os.environ.get('DATA_DIR', '/data'))/'nginx/nginx.conf')
 
 def restore(data, source, work):
     result = stage_archive(source, work / 'stage')
@@ -289,6 +288,10 @@ def main():
     print(json.dumps(result, separators=(',', ':')))
 
 if __name__ == '__main__':
+    if os.environ.get("LITEEDGE_CONFIG_LOCK_HELD") != "1":
+        os.execv(sys.executable, [sys.executable, "/opt/liteedge/bin/configlock.py",
+                                  sys.executable, __file__, *sys.argv[1:]])
+
     try:
         main()
     except (InvalidBackup, OSError, tarfile.TarError, subprocess.CalledProcessError, ValueError) as error:

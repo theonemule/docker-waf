@@ -1,0 +1,40 @@
+{
+  "same": ["gateway-conformance-infra/same-namespace"],
+  "https": ["gateway-conformance-infra/same-namespace-with-https-listener"],
+  "all": ["gateway-conformance-infra/all-namespaces"],
+  "backend": ["gateway-conformance-infra/backend-namespaces"],
+  "slot1": [
+    "gateway-conformance-infra/gateway-add-listener",
+    "gateway-conformance-infra/gateway-certificate-malformed-secret",
+    "gateway-conformance-infra/gateway-observed-generation-bump",
+    "gateway-conformance-infra/gateway-only-invalid-route-kind",
+    "gateway-conformance-infra/gateway-secret-invalid-reference-grant",
+    "gateway-conformance-infra/gateway-secret-missing-reference-grant",
+    "gateway-conformance-infra/gateway-secret-reference-grant-all-in-namespace",
+    "gateway-conformance-infra/gateway-secret-reference-grant-specific",
+    "gateway-conformance-infra/gateway-static-addresses",
+    "gateway-conformance-infra/gateway-with-infrastructure-metadata",
+    "gateway-conformance-infra/gateway-with-one-attached-route",
+    "gateway-conformance-infra/gateway-with-one-not-matching-port-and-section-name-route",
+    "gateway-conformance-infra/gateway-with-two-listeners-and-one-attached-route",
+    "gateway-conformance-infra/gateway-without-address-value",
+    "gateway-conformance-infra/http-listener-isolation",
+    "gateway-conformance-infra/http-listener-isolation-with-hostname-intersection",
+    "gateway-conformance-infra/httproute-hostname-intersection",
+    "gateway-conformance-infra/httproute-listener-hostname-matching",
+    "gateway-conformance-infra/httproute-listener-port-matching",
+    "gateway-conformance-infra/same-namespace-with-http-listener-on-8080",
+    "gateway-conformance-infra/tlsroutes-only"
+  ],
+  "slot2": [
+    "gateway-conformance-infra/gateway-certificate-nonexistent-secret",
+    "gateway-conformance-infra/gateway-remove-listener",
+    "gateway-conformance-infra/gateway-supported-and-invalid-route-kind",
+    "gateway-conformance-infra/gateway-with-two-attached-routes",
+    "gateway-conformance-infra/httproute-hostname-intersection-all"
+  ],
+  "slot3": [
+    "gateway-conformance-infra/gateway-certificate-unsupported-group",
+    "gateway-conformance-infra/unresolved-gateway-with-one-attached-unresolved-route"
+  ]
+}

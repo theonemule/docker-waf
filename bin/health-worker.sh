@@ -41,7 +41,11 @@ probe_one() {
   fi
   [[ "$next" =~ ^[0-9]+$ ]] || next=0
   (( now >= next )) || return 0
+  if [[ -n "$(kv_get "$route" GW_BACKEND_TLS_B64)" || "$origin" == https://* && -n "$(kv_get "$route" GW_BACKEND_TLS_PEERS_B64)" ]]; then
+    code="$(python3 /opt/liteedge/bin/backend-tls-probe.py "$route" "$origin" "$path" "$timeout" 2>/dev/null)" || code=000
+  else
   code="$(curl --noproxy '*' -sS -o /dev/null -w '%{http_code}' --connect-timeout "$timeout" --max-time "$timeout" --max-redirs 0 "$origin$path" 2>/dev/null)" || code=000
+  fi
   if [[ "$expect" == *xx ]]; then
     [[ "$code" == "${expect:0:1}"?? ]] && ok=1
   else
@@ -82,7 +86,7 @@ tick() {
     for route in "$(route_dir "$host")"/*.route; do
       [[ "$(kv_get "$route" HEALTH_ENABLED)" == 1 ]] || continue
       while IFS= read -r endpoint; do
-        [[ -n "$endpoint" ]] || continue
+        [[ -n "$endpoint" && "$endpoint" != invalid && "$endpoint" != unavailable ]] || continue
         probe_one "$host" "$route" "$endpoint" "$now"
       done < <(pool_urls "$route")
     done

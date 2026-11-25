@@ -50,20 +50,20 @@ The management plane is intentionally small:
 - Flat-file persistent configuration
 - No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
-## Upgrade an existing installation to v3.1.6
+## Upgrade an existing installation to v3.3.0
 
-Release v3.1.6 provides a **single in-place upgrader** for Docker Compose
+Release v3.3.0 provides a **single in-place upgrader** for Docker Compose
 and native Alpine/OpenRC installs. It does not reset credentials, sites,
 certificates, WAF settings, observability configuration, or persistent logs.
-The upgrader is pinned to `v3.1.6`, verifies the Alpine archive's SHA-256,
-and attempts to restore the prior runtime/version on failed activation.
+The upgrader is pinned to `v3.3.0`, verifies the Alpine archive's SHA-256,
+and backs up configuration before activation and restores it with the prior runtime on failed activation.
 
-Download the script and its checksum from the
-[LiteEdge v3.1.6 release](https://github.com/theonemule/docker-waf/releases/tag/v3.1.6):
+After the release has been published, download the script and its checksum from the
+[LiteEdge v3.3.0 release](https://github.com/theonemule/docker-waf/releases/tag/v3.3.0):
 
 ```bash
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.6/upgrade-liteedge.sh
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.1.6/upgrade-liteedge.sh.sha256
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.0/upgrade-liteedge.sh
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.0/upgrade-liteedge.sh.sha256
 sha256sum -c upgrade-liteedge.sh.sha256
 chmod +x upgrade-liteedge.sh
 ```
@@ -75,11 +75,11 @@ specify its directory containing `docker-compose.yml`, `.env`, and `data/`:
 ./upgrade-liteedge.sh --mode docker --compose-dir /path/to/liteedge
 ```
 
-The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.1.6`,
+The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.3.0`,
 modifies only `LITEEDGE_VERSION` in the existing `.env`, re-creates
 the service via Compose, and verifies container health. Compose overrides,
-custom environment values, and `data/` remain unchanged. If activation fails,
-it restores `.env` and attempts to relaunch the prior image.
+custom environment values, credentials, and authoritative `data/` configuration are preserved. The upgrader verifies the actual installed runtime version, including installations using a local mutable tag. Pin the previous image locally before upgrading if that tag no longer identifies the installed container. If activation fails,
+it restores the configuration snapshot and `.env`, then attempts to relaunch the prior image.
 
 For a **standalone Alpine/OpenRC** installation:
 
@@ -90,13 +90,12 @@ sudo ./upgrade-liteedge.sh --mode alpine
 This verifies and stages the official x86-64 runtime archive before stopping
 LiteEdge. It swaps `/opt/liteedge`, updates the OpenRC service and NGINX
 file capability, and checks the restarted service. On failure the original
-executable tree and service definition are restored. Persistent
-`/var/lib/liteedge` and `/etc/conf.d/liteedge` are untouched.
+executable tree and service definition are restored. Persistent configuration in `/var/lib/liteedge` and `/etc/conf.d/liteedge` is retained; rollback restores the pre-upgrade configuration. Logs are excluded from the snapshot.
 Use `--no-start` only for an intentionally stopped Alpine maintenance
 upgrade. A new install should use the release installers instead.
 
 To validate the upgrade paths locally, run `bash tests/test-upgrade.sh`
-and `bash tests/test-upgrade-alpine.sh` (the latter requires Docker).
+and `bash tests/test-upgrade-alpine.sh` (the latter requires Docker). The release gate also migrates real v3.1.5 and v3.1.6 container state, verifies routing and WAF behavior, and tests restart. Earlier 3.x sources are supported by the version guard, but deployments with custom NGINX or older configurations should be staged first.
 
 ## Release contents
 
@@ -139,7 +138,14 @@ for configuration, defaults, alert recipes, and limitations.
 
 OWASP CRS policy is route-scoped. Each route can enable or disable the WAF, select
 PL1 through PL4, select installed CRS plugins and application rule-exclusion plugins,
-and maintain route-only disabled rule IDs. The OWASP page manages application profiles
+and maintain route-only disabled rule IDs. Generated routes using the bundled,
+unmodified CRS share one compiled base ruleset per NGINX configuration generation;
+route-local transaction controls and exceptions remain isolated. The shared base
+is loaded lazily only when a protected HTTP location needs it. Transport listeners
+do not use ModSecurity. Plugin-dependent policies, enabled custom rules, imported
+or manually modified configurations, and operator-managed CRS releases retain
+the complete ordered ruleset for compatibility. See
+[Shared WAF rule architecture](docs/shared-waf-rules.md). The OWASP page manages application profiles
 and other plugins separately, allows editable plugin configuration with transactional
 rollback, exposes core CRS rules through a searchable management dialog, and maintains
 custom rules and global exclusions. LiteEdge periodically checks the official OWASP CRS
@@ -656,3 +662,6 @@ or UEFI VM. UEFI Secure Boot is **not** supported by the unsigned GRUB loader.
    it does **not** generate a second password.
 4. Open `https://VM_IP:8443/` and sign in with the LiteEdge web admin username
    and password you chose during setup (default username: `admin`). T
+### Experimental Kubernetes integration
+
+See [LightEdge Kubernetes controller](docs/kubernetes-controller.md) · [Shared file HA](docs/shared-configuration-ha.md) for the scoped provider API, controller, Helm chart, support limits and installation instructions.

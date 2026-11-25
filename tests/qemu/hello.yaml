@@ -1,0 +1,222 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: hello}
+spec:
+  replicas: 2
+  selector: {matchLabels: {app: hello}}
+  template:
+    metadata: {labels: {app: hello}}
+    spec:
+      nodeSelector: {lightedge-lab/worker: "true"}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector: {matchLabels: {app: hello}}
+            topologyKey: kubernetes.io/hostname
+      containers:
+      - name: hello
+        image: @FIXTURE_IMAGE@
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: POD_NAME
+          valueFrom: {fieldRef: {fieldPath: metadata.name}}
+        - name: NODE_NAME
+          valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+        ports:
+        - {name: http, containerPort: 8080}
+        - {name: https, containerPort: 8443}
+        - {name: grpc, containerPort: 12005}
+        - {name: tcp, containerPort: 12001}
+        - {name: udp, containerPort: 12002, protocol: UDP}
+        - {name: tls, containerPort: 12003}
+        readinessProbe: {httpGet: {path: /, port: 8080}}
+        volumeMounts:
+        - {name: backend-cert, mountPath: /cert, readOnly: true}
+        - {name: frontend-ca, mountPath: /trust, readOnly: true}
+      volumes:
+      - {name: backend-cert, secret: {secretName: backend-cert}}
+      - {name: frontend-ca, configMap: {name: frontend-ca}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: hello}
+spec:
+  clusterIP: None
+  selector: {app: hello}
+  ports:
+  - {name: http, port: 8080, targetPort: http}
+  - {name: grpc, port: 12005, targetPort: grpc}
+  - {name: tcp, port: 12001, targetPort: tcp}
+  - {name: udp, port: 12002, targetPort: udp, protocol: UDP}
+  - {name: tls, port: 12003, targetPort: tls}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: secure}
+spec:
+  clusterIP: None
+  selector: {app: hello}
+  ports: [{name: https, port: 8443, targetPort: https}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: BackendTLSPolicy
+metadata: {name: verified-upstream}
+spec:
+  targetRefs: [{group: "", kind: Service, name: secure, sectionName: https}]
+  validation:
+    hostname: backend.apps.example.test
+    caCertificateRefs: [{group: "", kind: ConfigMap, name: backend-ca}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: edge}
+spec:
+  gatewayClassName: lightedge
+  listeners:
+  - name: http
+    protocol: HTTP
+    port: 80
+    hostname: hello.apps.example.test
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: https
+    protocol: HTTPS
+    port: 443
+    hostname: hello.apps.example.test
+    tls: {mode: Terminate, certificateRefs: [{name: frontend-cert}]}
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: extra-http
+    protocol: HTTP
+    port: 8081
+    hostname: extra.apps.example.test
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: extra-https
+    protocol: HTTPS
+    port: 8443
+    hostname: extra.apps.example.test
+    tls: {mode: Terminate, certificateRefs: [{name: frontend-cert}]}
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: secure-http
+    protocol: HTTP
+    port: 80
+    hostname: secure.apps.example.test
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: secure-https
+    protocol: HTTPS
+    port: 443
+    hostname: secure.apps.example.test
+    tls: {mode: Terminate, certificateRefs: [{name: frontend-cert}]}
+    allowedRoutes: {kinds: [{kind: HTTPRoute}]}
+  - name: grpc
+    protocol: HTTP
+    port: 80
+    hostname: grpc.apps.example.test
+    allowedRoutes: {kinds: [{kind: GRPCRoute}]}
+  - name: grpcs
+    protocol: HTTPS
+    port: 443
+    hostname: grpc.apps.example.test
+    tls: {mode: Terminate, certificateRefs: [{name: frontend-cert}]}
+    allowedRoutes: {kinds: [{kind: GRPCRoute}]}
+  - name: tcp
+    protocol: TCP
+    port: 9000
+    allowedRoutes: {kinds: [{kind: TCPRoute}]}
+  - name: udp
+    protocol: UDP
+    port: 9001
+    allowedRoutes: {kinds: [{kind: UDPRoute}]}
+  - name: tls
+    protocol: TLS
+    port: 9444
+    hostname: passthrough.apps.example.test
+    tls: {mode: Passthrough}
+    allowedRoutes: {kinds: [{kind: TLSRoute}]}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: hello}
+spec:
+  parentRefs: [{name: edge, sectionName: http}, {name: edge, sectionName: https}]
+  hostnames: [hello.apps.example.test]
+  rules:
+  - backendRefs: [{name: hello, port: 8080}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: extra}
+spec:
+  parentRefs: [{name: edge, sectionName: extra-http}, {name: edge, sectionName: extra-https}]
+  hostnames: [extra.apps.example.test]
+  rules:
+  - backendRefs: [{name: hello, port: 8080}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: secure}
+spec:
+  parentRefs: [{name: edge, sectionName: secure-http}, {name: edge, sectionName: secure-https}]
+  hostnames: [secure.apps.example.test]
+  rules:
+  - backendRefs: [{name: secure, port: 8443}]
+
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata: {name: grpc}
+spec:
+  parentRefs: [{name: edge, sectionName: grpc}, {name: edge, sectionName: grpcs}]
+  hostnames: [grpc.apps.example.test]
+  rules:
+  - matches: [{method: {service: example.Echo, method: Call}}]
+    filters: [{type: RequestHeaderModifier, requestHeaderModifier: {set: [{name: X-Route, value: gateway}]}}]
+    backendRefs: [{name: hello, port: 12005}]
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata: {name: tcp}
+spec:
+  parentRefs: [{name: edge, sectionName: tcp}]
+  rules: [{backendRefs: [{name: hello, port: 12001}]}]
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: UDPRoute
+metadata: {name: udp}
+spec:
+  parentRefs: [{name: edge, sectionName: udp}]
+  rules: [{backendRefs: [{name: hello, port: 12002}]}]
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TLSRoute
+metadata: {name: tls}
+spec:
+  parentRefs: [{name: edge, sectionName: tls}]
+  hostnames: [passthrough.apps.example.test]
+  rules: [{backendRefs: [{name: hello, port: 12003}]}]
+
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: hello-http}
+spec:
+  ingressClassName: lightedge
+  rules:
+  - host: ingress.apps.example.test
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: hello, port: {number: 8080}}}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: hello-https}
+spec:
+  ingressClassName: lightedge
+  tls: [{hosts: [ingress-tls.apps.example.test], secretName: frontend-cert}]
+  rules:
+  - host: ingress-tls.apps.example.test
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend: {service: {name: hello, port: {number: 8080}}}

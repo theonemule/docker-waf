@@ -1,0 +1,17 @@
+{{- if and .Values.controller.createClasses .Values.controller.enableIngress }}
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata:
+  name: {{ .Values.controller.ingressClass }}
+spec:
+  controller: {{ .Values.controller.name | quote }}
+{{- end }}
+{{- if and .Values.controller.createClasses .Values.controller.enableGateway }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: GatewayClass
+metadata:
+  name: {{ .Values.controller.gatewayClass }}
+spec:
+  controllerName: {{ .Values.controller.name | quote }}
+{{- end }}

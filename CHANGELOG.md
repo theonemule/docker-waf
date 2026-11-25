@@ -1,3 +1,43 @@
+## Unreleased — LiteEdge 3.3.0 and Kubernetes controller 1.0.0
+
+- Independent stable versions for the appliance (3.3.0), controller and chart (1.0.0); all release assets qualify before registry publication.
+- Scoped live management reads, categorized site settings and guided route creation.
+- Shared compiled WAF rules for compatible locations, with full ordered ruleset fallback where required.
+- Checksum-pinned upgrade from earlier 3.x releases with pre-activation configuration backup and rollback, preserving logs and credentials.
+- Scoped declarative provider API, revision checks, ownership and transactional rendering.
+- Separate Go controller for Ingress and a subset of Gateway API, native WAF policies and Helm deployment.
+- Gateway HTTPRoute conditional header/method matching, precedence, request header operations and WAF-protected redirects.
+- Operator-approved WAF profiles, policy status and independent multi-appliance snapshot replication.
+- Scoped wildcard and dedicated HTTP catch-all hosts; scheme-specific listener reservations; weighted HTTP 500 for invalid backend references and per-parent status.
+- Upstream Gateway API v1.4.0 conformance runner in a disposable kind cluster; initial same-namespace case passes.
+- Live multi-appliance HTTPS replication, external passive-failover and recovery regression.
+- Native shared-file HA mode: signed revision publication, cross-member writer locking, local refresh, explicit group membership and opt-in StatefulSet topology without a database.
+- Coordinated shared ACME accounts/challenges and renewal, interrupted-writer recovery, authenticated revision history, monotonic restoration and explicit retention preview/apply.
+- Kubernetes resource-local rule, listener, TLS and policy rejection; missing Ingress backend isolation; same-listener hostname fallback with original hostname precedence and explicit TLS rejection reservations.
+- Shared advanced route model across management SPA/API and Kubernetes provider: query/method/header matches, weighted pools, redirects, path/host rewrites, request and response header operations; security-header preservation.
+- Opt-in Kubernetes Ingress single-label wildcard hosts and dedicated defaultBackend/hostless routing, visible through the management API.
+- Standby readiness and Helm controller upgrade handling avoid a leader-election rollout deadlock.
+- Non-mutating provider preflight, resource-local quarantine and policy attribution, durable journal writes, drift repair, and rejection of manual NGINX overlays on provider sites.
+- Operator-provisioned independent Gateway partitions, per-parent status and outage isolation across appliances.
+- Gateway-level policy inheritance, constrained cross-namespace overrides, opt-in catch-all HTTPS and HTTPS-only provider administration in Server Settings.
+- Full and sampled request mirroring across SPA, native API and Gateway HTTPRoute, with explicitly authorized provider destinations, WAF gating and isolated shadow responses.
+- Partition-aware upstream conformance harness and schema-correct supported listener kinds.
+- Exact-generation NGINX reload acknowledgment over a private Unix socket to avoid mistaking a worker respawn or prior reload for a completed update.
+- Operator-provisioned extra HTTP listener ports, provider port scopes, native SPA/API route isolation and Helm Service mappings.
+- Bounded backend-pool retry configuration with explicit provider permission and non-idempotent replay safeguards.
+- Immediate per-partition status reporting, independent attachment accounting and explicit unsupported GatewayClass status.
+- Verified HTTPS upstreams with explicit SNI and CA trust, weighted TLS pools, provider authorization, BackendTLSPolicy v1 translation and per-Gateway status, CA rotation and fail-closed rejection.
+- Verified upstream TLS health probes, v1alpha3 discovery fallback and class-wide BackendTLSPolicy ancestor allocation.
+- Independent extra HTTPS listener certificates and rejection vhosts, scoped port authorization and Helm/API/SPA parity.
+- Bounded IPv4 EndpointSlice resolution for headless Services, weighted endpoint expansion and local 503 for empty Services.
+- Appliance-local absolute request/backend deadlines, minimum retry backoff, bounded single-backend retry, cancellation and backend-attempt telemetry with native SPA/API and Gateway API parity.
+- Independent verified TLS identities and CA bundles per HTTPS backend, mixed HTTP/HTTPS pools and per-peer health verification without plaintext downgrade.
+- Native HTTP/2 gRPC forwarding and GRPCRoute matching, metadata and weights; scoped TCPRoute, UDPRoute and TLSRoute SNI passthrough, stream-enabled appliance build, transport ownership, native management API/SPA, Helm ports, and isolated live protocol tests.
+- Private immutable NGINX configuration generations, validated atomic publication, exact reload acknowledgement and safe retirement.
+- Opt-in client-validated frontend certificate mode with mismatch status warning; strict DNS SAN checks remain default. Full upstream v1.4.0 HTTP and gRPC core profiles passed in the explicit interoperability mode.
+- Cross-host NFSv4.2 locking/rename/fsync and crash-release qualification; mixed NFS/SMB is disqualified.
+- Provider-owned sites remain read-only. Full Gateway API conformance, production multi-host HA validation and further optional protocol/traffic features remain pending.
+
 ## November 10, 2026 — LiteEdge v3.1.6 route traffic safeguards
 
 - Optional per-route IPv4/IPv6 IP-address and CIDR source allowlists, returning

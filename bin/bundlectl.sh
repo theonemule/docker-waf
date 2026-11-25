@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${LITEEDGE_CONFIG_LOCK_HELD:-0}" != 1 ]]; then
+  exec python3 /opt/liteedge/bin/configlock.py "$0" "$@"
+fi
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
 
@@ -119,6 +122,7 @@ validate_site_state_file() {
   local file="$1" expected_slug="$2"
   local host aliases slug mode upstream root force_https waf websocket
   host="$(kv_get "$file" HOST)"
+  [[ -z "$(kv_get "$file" PROVIDER)" && -z "$(kv_get "$file" GW_LISTENERS)" && -z "$(kv_get "$file" GW_TLS_REJECT)" && -z "$(kv_get "$file" GW_TLS_REJECT_LISTENERS)" && -z "$(kv_get "$file" GW_DISPATCH)" && -z "$(kv_get "$file" GW_WILDCARD_SINGLE)" ]] || die 'Provider site ownership and internal listener fields cannot be imported as manual sites.'
   validate_host "$host"
   slug="$(slug_for_host "$host")"
   [[ "$slug" == "$expected_slug" ]] || die "Site filename does not match its host: $host"
@@ -164,7 +168,17 @@ validate_routes_for_slug() {
 
     validate_route_match "$match"
     validate_route_path "$path"
-    validate_upstream "$target"
+    [[ "$(kv_get "$route" PROVIDER_ROUTE)" != 1 && "$(kv_get "$route" PROVIDER_QUARANTINED)" != 1 ]] || die 'Provider-owned routes cannot be imported as manual routes.'
+    if [[ "$(kv_get "$route" TYPED_ROUTE)" == 1 ]]; then
+      features="$(python3 /opt/liteedge/bin/route_features.py read "$route")" || die 'Invalid advanced route features.'
+      if jq -e '.redirect!=null' <<< "$features" >/dev/null; then
+        [[ -z "$target" && -z "$(kv_get "$route" BACKENDS)" ]] || die 'Redirect cannot have backends.'
+      else
+        validate_upstream "$target"
+      fi
+    else
+      validate_upstream "$target"
+    fi
     [[ -z "$websocket" || "$websocket" =~ ^[01]$ ]] || die "Invalid WebSocket route setting."
     [[ -z "$timeout" ]] || validate_timeout "$timeout"
     [[ -z "$waf" || "$waf" =~ ^[01]$ ]] || die "Invalid WAF route setting."
@@ -172,6 +186,7 @@ validate_routes_for_slug() {
     [[ -z "$profile" ]] || validate_waf_profile "$profile"
 
     expected_id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
+    if [[ "$(kv_get "$route" TYPED_ROUTE)" == 1 ]]; then expected_id="$(python3 /opt/liteedge/bin/route_features.py id "$route")"; fi
     [[ "$id" == "$expected_id" && "$(basename "$route")" == "$id.route" ]] ||
       die "Invalid route identifier in bundle."
   done
@@ -393,6 +408,11 @@ case "$cmd" in
     ;;
 
   import)
+    # Bulk site import is not ownership-aware yet. Reject instead of overwriting
+    # a managed site or introducing an ambiguous alias.
+    if grep -qs '^PROVIDER=.' "$SITE_DIR"/*.site; then
+      die 'Site bundle import is disabled while Kubernetes-managed sites exist.'
+    fi
     import_bundle "${1:-}" "${2:-0}" "${3:-}" "${4:-}"
     ;;
 

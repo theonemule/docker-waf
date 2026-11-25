@@ -78,7 +78,7 @@ sed -e 's@source /opt/liteedge/bin/common.sh@source "$LITEEDGE_TEST_COMMON"@' \
 chmod +x "$TMP/admin.sh"
 request_import() {
   printf 'test' | PATH_INFO=/admin/import REQUEST_METHOD=POST CONTENT_LENGTH=4 \
-    QUERY_STRING="$1" LITEEDGE_TEST_COMMON="$TMP/common.sh" \
+    QUERY_STRING="$1" LITEEDGE_CONFIG_LOCK_HELD=1 LITEEDGE_TEST_COMMON="$TMP/common.sh" \
     LITEEDGE_TEST_BUNDLECTL="$TMP/bundlectl.sh" "$TMP/admin.sh"
 }
 site_result="$(request_import 'scope=site&host=example.com&certificates=1')"

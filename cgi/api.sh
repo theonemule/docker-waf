@@ -22,18 +22,21 @@ api_json_file() {
 }
 api_route_json() {
   local file="$1" key value out='{}'
-  for key in ID MATCH PATH TARGET BACKENDS ACTION WEBSOCKET TIMEOUT WAF FORCE_HTTPS WAF_PL WAF_PLUGINS WAF_DISABLED LB_MODE MAX_FAILS FAIL_TIMEOUT HEALTH_ENABLED HEALTH_PATH HEALTH_EXPECT HEALTH_INTERVAL HEALTH_TIMEOUT HEALTH_FALL HEALTH_RISE HEALTH_COOLDOWN METHODS REWRITE_ENABLED REWRITE_PATTERN REWRITE_REPLACEMENT ALLOW_IPS RATE_COUNT RATE_UNIT MAX_BODY; do
+  for key in ID MATCH PATH TARGET BACKENDS BACKEND_WEIGHTS SCHEMES WAF_PROFILE PROVIDER_ROUTE PROVIDER_QUARANTINED TYPED_ROUTE ACTION WEBSOCKET TIMEOUT WAF FORCE_HTTPS WAF_PL WAF_PLUGINS WAF_DISABLED LB_MODE MAX_FAILS FAIL_TIMEOUT HEALTH_ENABLED HEALTH_PATH HEALTH_EXPECT HEALTH_INTERVAL HEALTH_TIMEOUT HEALTH_FALL HEALTH_RISE HEALTH_COOLDOWN METHODS REWRITE_ENABLED REWRITE_PATTERN REWRITE_REPLACEMENT ALLOW_IPS RATE_COUNT RATE_UNIT MAX_BODY; do
     value="$(kv_get "$file" "$key")"
     out="$(jq -cn --argjson obj "$out" --arg key "${key,,}" --arg value "$value" '$obj + {($key):$value}')"
   done
   local headers
   headers="$(kv_get "$file" X_HEADERS_B64)"
   [[ -z "$headers" ]] || headers="$(printf '%s' "$headers" | base64 -d 2>/dev/null || true)"
-  jq -cn --argjson obj "$out" --arg headers "$headers" '$obj + {x_headers:$headers}'
+  local features
+  features="$(python3 /opt/liteedge/bin/route_features.py read "$file")" || api_failure 500 'Invalid persisted route features.'
+  jq -cn --argjson obj "$out" --arg headers "$headers" --argjson features "$features" '$obj + {x_headers:$headers,features:$features,weights:((. as $unused|$obj.backend_weights)|split(",")|map(select(length>0)|tonumber))}'
 }
 api_site_json() {
-  local file="$1" host aliases enabled mode
+  local file="$1" host aliases enabled mode provider
   host="$(kv_get "$file" HOST)"
+  provider="$(kv_get "$file" PROVIDER)"
   aliases="$(kv_get "$file" ALIASES)"
   enabled="$(kv_get "$file" ENABLED)"
   [[ "$enabled" == 0 ]] || enabled=1
@@ -46,15 +49,37 @@ api_site_json() {
   for route in "$(route_dir "$host")"/*.route; do
     routes="$(jq -cn --argjson arr "$routes" --argjson element "$(api_route_json "$route")" '$arr+[$element]')"
   done
-  jq -cn --arg host "$host" --arg aliases "$aliases" --argjson enabled "$enabled" \
-    --arg tls "$mode" --arg cert_email "$cert_email" --argjson routes "$routes" \
-    '{host:$host,aliases:$aliases,enabled:($enabled==1),tls:$tls,cert_email:$cert_email,routes:$routes,route_count:($routes|length)}'
+  local tls_status='{}' listener certdir="$(cert_dir "$host")" listener_dir
+  local keys="$(kv_get "$file" GW_LISTENERS)"
+  if [[ -z "$keys" ]];then
+    keys="$(jq -r '(["https"]+ [.[]|.features.schemes[]|select(startswith("https:"))]|unique)|join(",")' <<< "$routes")"
+  fi
+  local -a listener_keys
+  IFS=, read -r -a listener_keys <<< "$keys"
+  for listener in "${listener_keys[@]}";do
+    [[ "$listener" == https || "$listener" == https:* ]] || continue
+    listener_dir="$certdir"
+    if [[ -n "$provider" && "$listener" == https:* ]];then listener_dir="$certdir/listeners/${listener/:/-}";fi
+    local state=missing
+    if [[ "$listener" == https && "$(kv_get "$file" GW_TLS_REJECT)" == 1 || ",$(kv_get "$file" GW_TLS_REJECT_LISTENERS)," == *",$listener,"* ]];then state=rejected
+    elif [[ -s "$listener_dir/fullchain.pem" && -s "$listener_dir/privkey.pem" ]];then state=configured;fi
+    tls_status="$(jq -cn --argjson obj "$tls_status" --arg k "$listener" --arg v "$state" '$obj+{($k):$v}')"
+  done
+  jq -cn --argjson tls_status "$tls_status" --arg host "$host" --arg aliases "$aliases" --argjson enabled "$enabled" \
+    --arg wildcard_single "$(kv_get "$file" GW_WILDCARD_SINGLE)" --arg listeners "$(kv_get "$file" GW_LISTENERS)" --arg tls_reject "$(kv_get "$file" GW_TLS_REJECT)" --arg tls "$mode" --arg cert_email "$cert_email" --arg provider "$provider" --argjson routes "$routes" \
+    '{host:$host,aliases:$aliases,enabled:($enabled==1),tls:$tls,cert_email:$cert_email,provider:$provider,listeners:($listeners|if .=="" then (["http","https"]+[$routes[].features.schemes[]|select(contains(":"))]|unique) else split(",") end),tls_reject:($tls_reject=="1"),tls_listeners:$tls_status,wildcard_single:($wildcard_single=="1"),routes:$routes,route_count:($routes|length)}'
 }
 api_site_detail() {
   local host="${PARAM[host]:-}" file base
   [[ -n "$host" ]] || api_failure 400 'Specify a hostname.'
-  validate_host "$host" 2>/dev/null || api_failure 400 'Invalid hostname.'
-  file="$(site_file "$host")"
+  if [[ "$host" == '*' || "$host" == \*.* ]]; then
+    [[ "$host" == '*' ]] || validate_host "${host:2}"
+    file="$(site_file "$host")"
+    [[ "$(kv_get "$file" HOST)" == "$host" && -n "$(kv_get "$file" PROVIDER)" ]] || api_failure 404 'Site not found.'
+  else
+    validate_host "$host"
+    file="$(site_file "$host")"
+  fi
   [[ -s "$file" ]] || api_failure 404 'Site not found.'
   base="$(api_site_json "$file")"
   local configuration="" baseline="" conflict="" delta="" disabled=''
@@ -242,12 +267,26 @@ api_entry() {
   # shellcheck disable=SC2317,SC2329
   redirect() { api_success '{"ok":true}'; }
   case "$endpoint" in
-    /api/v1/sites|/api/v1/site|/api/v1/server|/api/v1/alerts|/api/v1/owasp|/api/v1/catalog|/api/v1/logs|/api/v1/owasp/rules|/api/v1/owasp/crs/check)
+    /api/v1/sites|/api/v1/site|/api/v1/site-inventory|/api/v1/site-overview|/api/v1/route-detail|/api/v1/site-configuration|/api/v1/installed-plugins|/api/v1/streams|/api/v1/server|/api/v1/provider-admin|/api/v1/alerts|/api/v1/owasp|/api/v1/catalog|/api/v1/logs|/api/v1/owasp/rules|/api/v1/owasp/crs/check)
       [[ "$method" == GET ]] || api_failure 405 'GET required.'
       case "$endpoint" in
         /api/v1/sites) api_headers; api_sites ;;
+        /api/v1/site-inventory) python3 /opt/liteedge/bin/site_read.py inventory ;;
+        /api/v1/site-overview) python3 /opt/liteedge/bin/site_read.py overview "${PARAM[host]:-}" ;;
+        /api/v1/route-detail) python3 /opt/liteedge/bin/site_read.py route "${PARAM[host]:-}" "${PARAM[id]:-}" ;;
+        /api/v1/site-configuration) python3 /opt/liteedge/bin/site_read.py configuration "${PARAM[host]:-}" ;;
+        /api/v1/installed-plugins) python3 /opt/liteedge/bin/site_read.py plugins ;;
         /api/v1/site) api_site_detail ;;
         /api/v1/server) api_headers; api_server ;;
+        /api/v1/streams)
+          local transport
+          transport="$(python3 /opt/liteedge/bin/stream_routes.py list)" || api_failure 500 "Transport inventory unavailable."
+          api_success "$transport" ;;
+        /api/v1/provider-admin)
+          [[ "${HTTPS:-}" == on ]] || api_failure 403 "HTTPS required."
+          local inventory
+          inventory="$(python3 /opt/liteedge/bin/provider_admin.py list)" || api_failure 500 "Provider inventory unavailable."
+          api_headers; printf "%s\n" "$inventory" ;;
         /api/v1/alerts) api_headers; api_alerts ;;
         /api/v1/owasp) api_headers; api_owasp ;;
         /api/v1/owasp/rules) api_headers; api_crs_rules ;;

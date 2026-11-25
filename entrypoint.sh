@@ -26,6 +26,9 @@ mkdir -p \
   exit 1
 }
 
+# Restore interrupted provider transactions before rendering or starting NGINX.
+python3 /opt/liteedge/bin/providerctl.py recover
+
 chmod 750 "$DATA_DIR/auth"
 chmod 755 "$DATA_DIR/www"
 chmod 700 "$RUN_DIR"
@@ -52,16 +55,37 @@ if [[ ! -s "$DATA_DIR/certs/_admin/fullchain.pem" || ! -s "$DATA_DIR/certs/_admi
   chmod 644 "$DATA_DIR/certs/_admin/fullchain.pem"
 fi
 
-/opt/liteedge/bin/render-runtime.sh
-/opt/liteedge/bin/render-nginx.sh
+if [[ -n "${LITEEDGE_HA_DIR:-}" ]]; then
+  python3 /opt/liteedge/bin/ha_config.py startup
+else
+  /opt/liteedge/bin/render-runtime.sh
+  /opt/liteedge/bin/render-nginx.sh
+fi
+# Publish a fully validated generation before the first master start.
+python3 /opt/liteedge/bin/nginx_reload.py startup /opt/liteedge/sbin/nginx "$DATA_DIR/nginx/nginx.conf"
 # Continuous normalization/export and alert delivery; never blocks the proxy process.
 /opt/liteedge/bin/obs-worker.sh run >>"$DATA_DIR/logs/observability-worker.log" 2>&1 &
 /opt/liteedge/bin/health-worker.sh run >>"$DATA_DIR/logs/health-worker.log" 2>&1 &
 
-rm -f "$RUN_DIR/fcgiwrap.sock"
+rm -f "$RUN_DIR/fcgiwrap.sock" "$RUN_DIR/reload-ack.sock" "$RUN_DIR/deadline.sock" "$RUN_DIR/grpc-invalid.sock"
+# Only deadline-enabled routes depend on this local worker; ordinary NGINX
+# routes remain available if it fails. Supervise it independently.
+deadline_parent="$$"
+deadline_parent_start="$(awk '{print $22}' "/proc/$deadline_parent/stat")"
+(
+  while [[ "$(awk '{print $22}' "/proc/$deadline_parent/stat" 2>/dev/null || true)" == "$deadline_parent_start" ]]; do
+    /opt/liteedge/bin/deadline-proxy "$RUN_DIR/deadline.sock" "$deadline_parent" || true
+    sleep 1
+  done
+) >>"$DATA_DIR/logs/deadline-worker.log" 2>&1 &
+# A slow or failed optional worker must not prevent unrelated sites starting.
+for ((i=0;i<20;i++));do [[ -S "$RUN_DIR/deadline.sock" ]] && break;sleep .1;done
 spawn-fcgi -s "$RUN_DIR/fcgiwrap.sock" -M 600 -- /usr/bin/fcgiwrap
 chmod 600 "$RUN_DIR/fcgiwrap.sock"
 
+if [[ -n "${LITEEDGE_HA_DIR:-}" ]]; then
+  python3 /opt/liteedge/bin/ha_config.py watch >>"$DATA_DIR/logs/ha-worker.log" 2>&1 &
+fi
 (
   sleep 60
   while :; do
@@ -70,4 +94,4 @@ chmod 600 "$RUN_DIR/fcgiwrap.sock"
   done
 ) &
 
-exec /opt/liteedge/sbin/nginx -c "$DATA_DIR/nginx/nginx.conf" -g 'daemon off;'
+exec /opt/liteedge/sbin/nginx -c "$DATA_DIR/.liteedge-nginx-generations/active.conf" -g 'daemon off;'

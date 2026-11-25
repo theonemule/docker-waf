@@ -1,0 +1,34 @@
+name: Kubernetes controller checks
+on:
+  push:
+    branches: [master, "feature/**"]
+    paths: ['controller/**', 'deploy/kubernetes/**', '.github/workflows/kubernetes-controller.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+          cache-dependency-path: controller/go.sum
+      - run: go test -mod=readonly ./... && go vet -mod=readonly ./...
+        working-directory: controller
+      - run: python3 tests/test-provider.py && python3 tests/test-ha-config.py && python3 tests/test-nginx-generation.py
+      - run: docker build -t lightedge-controller:checks-${{ github.run_id }} controller
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - run: |
+          helm lint deploy/kubernetes/helm/lightedge --set provider.url=https://edge.example.com:9443
+          helm lint deploy/kubernetes/helm/lightedge --set appliance.enabled=true
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true >/dev/null
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPPorts[0].port=8080,appliance.extraHTTPPorts[0].targetPort=18080,controller.extraHTTPPorts[0]=8080' >/dev/null
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPSPorts[0].port=8443,appliance.extraHTTPSPorts[0].targetPort=18443,controller.extraHTTPSPorts[0]=8443' >/dev/null
+          helm lint deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set appliance.ha.enabled=true --set appliance.ha.existingClaim=shared-config --set appliance.ha.keySecret=ha-key
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set controller.enableGRPC=true --set 'appliance.extraTCPPorts[0].port=9000,appliance.extraTCPPorts[0].targetPort=19000,appliance.extraUDPPorts[0].port=9001,appliance.extraUDPPorts[0].targetPort=19001,appliance.extraTLSPorts[0].port=9444,appliance.extraTLSPorts[0].targetPort=19444,controller.extraTCPPorts[0]=9000,controller.extraUDPPorts[0]=9001,controller.extraTLSPorts[0]=9444' >/dev/null

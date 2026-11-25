@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${LITEEDGE_CONFIG_LOCK_HELD:-0}" != 1 ]]; then
+  exec python3 /opt/liteedge/bin/configlock.py "$0" "$@"
+fi
 # shellcheck disable=SC1091
 source /opt/liteedge/bin/common.sh
 
@@ -56,6 +59,8 @@ done
 
 mkdir -p "$NGINX_DIR" "$NGINX_SITE_DIR" "$RUN_DIR" "$RUN_DIR/client_temp" "$RUN_DIR/proxy_temp" "$RUN_DIR/fastcgi_temp" "$RUN_DIR/uwsgi_temp" "$RUN_DIR/scgi_temp"
 chmod 700 "$RUN_DIR"
+python3 /opt/liteedge/bin/nginx_reload.py init
+[[ -f "$NGINX_DIR/streams.conf" ]] || : > "$NGINX_DIR/streams.conf"
 
 escape_sed() {
   printf '%s' "$1" | sed 's/[&|]/\\&/g'
@@ -69,6 +74,13 @@ replace_file() {
   mv -f "$tmp" "$target"
 }
 
+
+extra_ports="$(python3 /opt/liteedge/bin/listener_ports.py)" || die 'Invalid extra HTTP listener mapping.'
+{
+  if [[ -n "$extra_ports" ]];then
+    while read -r key bind;do printf '%s %s;\n' "$bind" "${key#*:}";done <<< "$extra_ports"
+  fi
+} | replace_file "$NGINX_DIR/extra-listener-ports.conf"
 
 data_esc="$(escape_sed "$DATA_DIR")"
 run_esc="$(escape_sed "$RUN_DIR")"
