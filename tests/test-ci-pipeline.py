@@ -30,6 +30,11 @@ for name in ("publish-images", "publish-release"):
     assert "verify-artifacts" in jobs[name]["needs"]
     assert jobs[name]["if"] == "needs.build-appliance.outputs.publish == 'true'"
 assert "publish-images" in jobs["publish-release"]["needs"]
+steps = jobs["qualify-containers"]["steps"]
+cleanup = next(s for s in steps if s.get("name") == "Destroy and verify disposable QEMU resources")
+assert cleanup["if"] == "always() && matrix.suite == 'qemu'"
+assert steps.index(cleanup) < next(i for i,s in enumerate(steps) if s.get("name") == "Preserve QEMU regression evidence")
+assert 'bash tests/qemu/cleanup-ci.sh "$QEMU_CI_SCOPE"' in cleanup["run"]
 assert "sha256sum -c SHA256SUMS" in raw
 assert "github.run_attempt" in raw
 assert raw.count("Build standalone appliance payload from source") == 1

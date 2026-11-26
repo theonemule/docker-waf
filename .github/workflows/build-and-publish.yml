@@ -111,6 +111,7 @@ jobs:
           python3 tests/test-ha-config.py
           python3 tests/test-nginx-generation.py
           python3 tests/test-ci-pipeline.py
+          bash tests/test-qemu-lifecycle.sh
 
   build-appliance:
     needs: validate
@@ -452,15 +453,30 @@ jobs:
         if: matrix.suite == 'kind'
         run: bash tests/test-extra-routes-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
 
+      - name: Purge stale disposable CI QEMU resources
+        if: matrix.suite == 'qemu'
+        run: bash tests/qemu/cleanup-ci.sh all
+
       - name: Three-VM QEMU multi-protocol regression
         if: matrix.suite == 'qemu'
         timeout-minutes: 45
         shell: bash
+        env:
+          QEMU_CI_SCOPE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.repeat_pass || 'single' }}
         run: |
           set -euo pipefail
           # Reuse immutable downloaded test inputs; every file is hash-verified.
           export QEMU_CACHE_DIR="$HOME/.cache/lightedge-qemu"
           bash tests/test-qemu-kubernetes.sh "${IMAGE_NAME}:ci" lightedge-controller:ci "$PWD/qemu-qualification"
+      - name: Destroy and verify disposable QEMU resources
+        if: always() && matrix.suite == 'qemu'
+        env:
+          QEMU_CI_SCOPE: ${{ github.run_id }}-${{ github.run_attempt }}-${{ inputs.repeat_pass || 'single' }}
+        run: |
+          set -euo pipefail
+          mkdir -p qemu-qualification
+          bash tests/qemu/cleanup-ci.sh "$QEMU_CI_SCOPE" 2>&1 | tee qemu-qualification/final-cleanup.log
+
       - name: Preserve QEMU regression evidence
         if: always() && matrix.suite == 'qemu'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

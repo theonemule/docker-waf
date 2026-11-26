@@ -21,7 +21,23 @@ credentials mounts. VM SSH, Kubernetes API and public test forwarding
 ports bind only to the runner's loopback. Fresh ephemeral SSH keys,
 provider token, admin TLS key and HA key are generated for each test.
 Only evidence files (not VM disks, private keys or kubeconfig) are copied
-out when the runner exits. The VMs and runner are removed.
+out when the runner exits. The cached Alpine cloud image is immutable
+installation media, never a previously booted VM disk. Each run creates
+three complete independent QCOW2 disks (no backing files), new cloud-init
+seed media, SSH identities, Kubernetes installation, NFS storage and Helm
+releases. Each guest validates its unique cloud-init token, completed
+cloud-init, packages, kernel/cgroups, address and empty K3s/NFS state before
+installation. Kubernetes node boot IDs must match those freshly booted VMs.
+
+The CI wrapper labels its disposable containers, bridge, and fixture/harness
+images with a run scope. The guest shuts down QEMU and destroys its private
+disks and state on exit; the host forcibly removes the container and all
+associated volumes, removes its bridge and images, and verifies absence.
+An independent always-run CI step repeats cleanup and checks the result;
+the next serialized CI QEMU job purges only stale CI-labelled resources.
+No running manual lab or unrelated virtual machine is eligible for deletion.
+A runner power failure can prevent immediate cleanup; preflight cleanup
+recovers on the next run. No mutable guest state is cached.
 
 ## Repeat
 

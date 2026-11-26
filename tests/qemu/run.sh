@@ -3,6 +3,7 @@
 set -euo pipefail
 umask 077
 cd /lab
+[[ ! -e /lab/private ]] || { echo "Refusing reused VM state" >&2;exit 1; }
 mkdir -p /lab/evidence /lab/private
 exec > >(tee -a /lab/evidence/run.log) 2>&1
 export KUBECONFIG=/lab/private/kubeconfig
@@ -29,6 +30,7 @@ cleanup(){
      k --request-timeout=15s -n lightedge-system exec "test-lightedge-appliance-$i" -c appliance -- sh -c 'tail -100 /data/logs/ha-worker.log 2>/dev/null || true; jq -c "{revision,digest}" /data/.liteedge-ha-applied.json /ha/current.json' >"evidence/appliance-$i-ha.txt" 2>&1
    done
    k --request-timeout=15s -n lightedge-system get endpointslices -o yaml >evidence/endpointslices.yaml 2>&1
+   k --request-timeout=15s -n apps get services,endpointslices -o yaml >evidence/backend-endpoints.yaml 2>&1
    k --request-timeout=15s get events -A --sort-by=.metadata.creationTimestamp >evidence/events.txt 2>&1
  fi
  for n in 1 2 3;do
@@ -38,8 +40,18 @@ cleanup(){
  for pid in "${pids[@]}";do kill "$pid" 2>/dev/null||true;done
  # Wait for VM children only; the process-substitution logger drains on exit.
  for pid in "${pids[@]}";do wait "$pid" 2>/dev/null||true;done
+ for pid in "${pids[@]}";do if kill -0 "$pid" 2>/dev/null;then rc=1;fi;done
+ # Destroy all mutable guest disks, seed media, credentials and cluster state.
+ rm -rf /lab/private || rc=1
+ [[ ! -e /lab/private ]] || rc=1
+ if [[ ! -e /lab/private ]];then
+   echo "PASS mutable VM disks and private state removed" >evidence/guest-cleanup.txt
+ else
+   echo "FAIL private state still exists" >evidence/guest-cleanup.txt
+ fi
  echo "$rc" >evidence/result.exit
  echo "QEMU integration exit=$rc; VM processes stopped"
+ exit "$rc"
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -52,14 +64,21 @@ worker_mem=${QEMU_WORKER_MEM_MB:-1536};control_mem=${QEMU_CONTROL_MEM_MB:-2048}
 [[ "$worker_mem" =~ ^[0-9]+$ && "$control_mem" =~ ^[0-9]+$ ]]
 ((worker_mem>=1024 && worker_mem<=4096 && control_mem>=1536 && control_mem<=4096))
 # Unique multicast bus even if another harness is running on the host.
+boot_nonce="$(openssl rand -hex 16)"
 bus_id="$(openssl rand -hex 4)"
 mcast="239.192.$((16#${bus_id:0:2})).$((16#${bus_id:2:2})):$((20000+16#${bus_id:4:4}%30000))"
 echo "QEMU isolated guest LAN: $mcast"
 echo "QEMU accelerator=$accel; control plane $control_mem MiB; workers $worker_mem MiB each; 1 vCPU per node"
 for n in 1 2 3;do
  name=le-node$n
- mkdir -p "private/$name"
- qemu-img create -q -f qcow2 -F qcow2 -b "$base" "private/$name/disk.qcow2" 12G
+ mkdir "private/$name"
+ # Independent disk from pristine installation media; no backing chain or
+ # writable disk from another run can be attached.
+ qemu-img convert -f qcow2 -O qcow2 "$base" "private/$name/disk.qcow2"
+ qemu-img resize -q "private/$name/disk.qcow2" 12G
+ qemu-img info --output=json "private/$name/disk.qcow2" >"evidence/$name-disk.json"
+ jq -e '.format=="qcow2" and .["virtual-size"]==12884901888 and (has("backing-filename")|not)' "evidence/$name-disk.json" >/dev/null
+ qemu-img check "private/$name/disk.qcow2" >"evidence/$name-disk-check.txt"
  cat >"private/$name/user-data" <<YAML
 #cloud-config
 hostname: $name
@@ -87,18 +106,39 @@ write_files:
       #!/bin/sh
       ip link set eth1 up
       ip addr replace 192.168.77.$((10+n))/24 dev eth1
+  - path: /usr/local/sbin/lightedge-guest-init
+    permissions: '0700'
+    content: |
+      #!/bin/sh
+      set -eu
+      chmod 700 /root/.ssh
+      chmod 600 /root/.ssh/authorized_keys
+      sh /etc/local.d/10-lab-net.start
+      rc-update add local default
+      printf 'rc_cgroup_mode=unified\n' >> /etc/rc.conf
+      rc-update add cgroups boot
+      rc-service cgroups start
+      modprobe overlay
+      modprobe br_netfilter
+      modprobe vxlan
+      sysctl -w net.ipv4.ip_forward=1
+      installed=false
+      for mirror in https://dl-2.alpinelinux.org/alpine https://dl-cdn.alpinelinux.org/alpine https://mirror.clarkson.edu/alpine; do
+        printf '%s\n' "\$mirror/v3.22/main" "\$mirror/v3.22/community" >/etc/apk/repositories
+        if timeout 120 apk --timeout 20 add --no-cache iptables ip6tables iproute2 nfs-utils curl ca-certificates; then installed=true; break; fi
+      done
+      \$installed
+      for pkg in iptables ip6tables iproute2 nfs-utils curl ca-certificates; do apk info -e "\$pkg"; done
+      test -e /sys/fs/cgroup/cgroup.controllers
+      test ! -e /var/lib/rancher/k3s
+      test ! -e /etc/rancher/k3s
+      test ! -e /usr/local/bin/k3s
+      test ! -e /srv/lightedge-ha
+      printf '%s\n' '$boot_nonce-$name' >/var/tmp/lightedge-vm-ready
 runcmd:
-  - [sh, -c, 'chmod 700 /root/.ssh; chmod 600 /root/.ssh/authorized_keys']
-  - [sh, /etc/local.d/10-lab-net.start]
-  - [rc-update, add, local, default]
-  - [sh, -c, 'printf "rc_cgroup_mode=unified\n" >> /etc/rc.conf']
-  - [rc-update, add, cgroups, boot]
-  - [rc-service, cgroups, start]
-  - [sh, -c, 'modprobe overlay; modprobe br_netfilter; modprobe vxlan; sysctl -w net.ipv4.ip_forward=1']
-  - [sh, -c, 'apk add --no-cache iptables ip6tables iproute2 nfs-utils curl ca-certificates']
-  - [touch, /var/tmp/lightedge-vm-ready]
+  - [sh, /usr/local/sbin/lightedge-guest-init]
 YAML
- printf 'instance-id: %s\nlocal-hostname: %s\n' "$name" "$name" >"private/$name/meta-data"
+ printf 'instance-id: %s\nlocal-hostname: %s\n' "$boot_nonce-$name" "$name" >"private/$name/meta-data"
  genisoimage -quiet -output "private/$name/seed.iso" -volid cidata -joliet -rock "private/$name/user-data" "private/$name/meta-data"
  # Private multicast ethernet bus inside the runner's network namespace.
  mem=$worker_mem;[[ $n != 1 ]]||mem=$control_mem
@@ -113,8 +153,23 @@ YAML
    -no-reboot >"evidence/$name.qemu.log" 2>&1 &
  pids+=("$!")
 done
-wait_vm(){ local n="$1";for _ in $(seq 1 180);do if remote "$n" 'test -f /var/tmp/lightedge-vm-ready' >/dev/null 2>&1;then echo "VM $n ready";return 0;fi;sleep 3;done;echo "VM $n boot/cloud-init timed out";return 1; }
+wait_vm(){
+ local n="$1" expected="$boot_nonce-le-node$1"
+ for _ in $(seq 1 180);do
+   kill -0 "${pids[$((n-1))]}" || { echo "VM $n exited during provisioning" >&2;return 1; }
+   if remote "$n" "test \"\$(cat /var/tmp/lightedge-vm-ready 2>/dev/null)\" = '$expected'" >/dev/null 2>&1;then
+     remote "$n" "set -eu; timeout 90 cloud-init status --wait; test \"\$(hostname)\" = le-node$n; test \"\$(cat /var/tmp/lightedge-vm-ready)\" = '$expected'; for pkg in iptables ip6tables iproute2 nfs-utils curl ca-certificates; do apk info -e \"\$pkg\"; done; test -e /sys/fs/cgroup/cgroup.controllers; test \"\$(cat /proc/sys/net/ipv4/ip_forward)\" = 1; ip -4 addr show dev eth1 | grep -F '192.168.77.$((10+n))/24'; test ! -e /var/lib/rancher/k3s; test ! -e /etc/rancher/k3s; test ! -e /usr/local/bin/k3s; test ! -e /srv/lightedge-ha; uname -r; cat /etc/alpine-release" >"evidence/node$n-provisioning.txt" 2>&1 || { cat "evidence/node$n-provisioning.txt";return 1; }
+     remote "$n" 'cat /proc/sys/kernel/random/boot_id' >"evidence/node$n-boot-id.txt"
+     echo "PASS VM $n fresh boot, cloud-init, packages, network, kernel and empty K3s/NFS state"
+     return 0
+   fi
+   sleep 3
+ done
+ echo "VM $n boot/cloud-init timed out";return 1
+}
 for n in 1 2 3;do wait_vm "$n";done
+[[ $(cat evidence/node{1,2,3}-boot-id.txt | sort -u | wc -l) == 3 ]]
+
 for n in 1 2 3;do
  copy "$n" /lab/input/memory-sampler.sh /var/tmp/lightedge-memory-sampler.sh
  remote "$n" 'nohup sh /var/tmp/lightedge-memory-sampler.sh >/var/tmp/lightedge-memory.log 2>&1 </dev/null &'
@@ -151,10 +206,20 @@ for i in $(seq 1 180);do
  if [[ $i == 180 ]];then echo "Timed out waiting for three Ready Kubernetes nodes" >&2;k get nodes -o wide || true;exit 1;fi;sleep 3
 done
 k get nodes -o wide
+k get nodes -o json >evidence/fresh-cluster-nodes.json
+for n in 1 2 3;do
+  jq -e --arg name "le-node$n" --arg boot "$(cat "evidence/node$n-boot-id.txt")" --arg ip "192.168.77.$((10+n))" '
+    .items[] | select(.metadata.name==$name) |
+    .status.nodeInfo.bootID==$boot and .status.nodeInfo.kubeletVersion=="v1.34.3+k3s1" and
+    any(.status.addresses[];.type=="InternalIP" and .address==$ip) and
+    any(.status.conditions[];.type=="Ready" and .status=="True")
+  ' evidence/fresh-cluster-nodes.json >/dev/null
+done
+jq -e '[.items[].metadata.uid]|unique|length==3' evidence/fresh-cluster-nodes.json >/dev/null
 echo 'PASS three independent QEMU guest kernels joined the Kubernetes cluster'
 for n in 2 3;do k label node "le-node$n" lightedge-lab/worker=true;done
 # A dedicated, real NFSv4 export inside the first VM. No host filesystem mount.
-remote 1 'mkdir -p /srv/lightedge-ha; chown 10001:10001 /srv/lightedge-ha; chmod 700 /srv/lightedge-ha; printf "/srv/lightedge-ha 192.168.77.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=0)\n" >/etc/exports; rc-service rpcbind start || exit 1; for attempt in 1 2 3 4 5; do rc-service nfs start || true; if [ "$(cat /proc/fs/nfsd/threads 2>/dev/null || echo 0)" -gt 0 ]; then break; fi; sleep 2; done; test "$(cat /proc/fs/nfsd/threads)" -gt 0 || exit 1; exportfs -v'
+remote 1 'test ! -e /srv/lightedge-ha; mkdir /srv/lightedge-ha; chown 10001:10001 /srv/lightedge-ha; chmod 700 /srv/lightedge-ha; printf "/srv/lightedge-ha 192.168.77.0/24(rw,sync,no_subtree_check,no_root_squash,fsid=0)\n" >/etc/exports; rc-service rpcbind start || exit 1; for attempt in 1 2 3 4 5; do rc-service nfs start || true; if [ "$(cat /proc/fs/nfsd/threads 2>/dev/null || echo 0)" -gt 0 ]; then break; fi; sleep 2; done; test "$(cat /proc/fs/nfsd/threads)" -gt 0 || exit 1; exportfs -v'
 printf '%s' '{"cluster_id":"qemu-lab","bootstrap_node":"test-lightedge-appliance-0","members":{"test-lightedge-appliance-0":"test-lightedge-appliance-0.test-lightedge-appliance-members.lightedge-system.svc","test-lightedge-appliance-1":"test-lightedge-appliance-1.test-lightedge-appliance-members.lightedge-system.svc"}}' | remote 1 'umask 077;cat >/srv/lightedge-ha/cluster.json;chown 10001:10001 /srv/lightedge-ha/cluster.json'
 k apply --server-side -f /lab/input/gateway-api.yaml
 k wait --for=condition=Established crd/gatewayclasses.gateway.networking.k8s.io crd/gateways.gateway.networking.k8s.io crd/httproutes.gateway.networking.k8s.io crd/grpcroutes.gateway.networking.k8s.io crd/tcproutes.gateway.networking.k8s.io crd/udproutes.gateway.networking.k8s.io crd/tlsroutes.gateway.networking.k8s.io crd/backendtlspolicies.gateway.networking.k8s.io --timeout=120s
@@ -194,6 +259,18 @@ k -n apps create configmap backend-ca --from-file=ca.crt=private/backend.crt
 sed "s|@FIXTURE_IMAGE@|$FIXTURE_IMAGE|g" /lab/input/hello.yaml | k -n apps apply -f -
 source /lab/input/matrix.sh
 k -n apps rollout status deployment/hello --timeout=240s
+# Require fresh backend pods on both workers and ready EndpointSlices before
+# the protocol tests; do not treat Gateway readiness as Ingress readiness.
+k -n apps get pods -l app=hello -o json >evidence/hello-pods.json
+jq -e '.items|length==2 and ([.[].spec.nodeName]|unique|sort)==["le-node2","le-node3"] and all(.[];any(.status.conditions[];.type=="Ready" and .status=="True"))' evidence/hello-pods.json >/dev/null
+for svc in hello secure;do
+  for attempt in $(seq 1 60);do
+    k -n apps get endpointslices -l "kubernetes.io/service-name=$svc" -o json >"evidence/$svc-endpoints.json"
+    if jq -e '[.items[].endpoints[]|select(.conditions.ready==true)]|length==2 and ([.[].nodeName]|unique|sort)==["le-node2","le-node3"]' "evidence/$svc-endpoints.json" >/dev/null;then break;fi
+    [[ "$attempt" -lt 60 ]] || { echo "Backend $svc failed endpoint readiness" >&2;exit 1; }
+    sleep 2
+  done
+done
 k -n apps wait --for=condition=Programmed gateway/edge --timeout=180s
 wait_routes
 wait_members 2
