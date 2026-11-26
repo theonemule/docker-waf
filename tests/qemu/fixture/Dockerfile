@@ -1,4 +1,4 @@
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.11-bookworm AS build
 COPY main.go /src/main.go
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /probe /src/main.go
 FROM alpine:3.24

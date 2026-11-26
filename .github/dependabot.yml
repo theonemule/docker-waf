@@ -1,0 +1,30 @@
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /controller
+    schedule:
+      interval: monthly
+    groups:
+      kubernetes-client:
+        patterns:
+          - "k8s.io/*"
+      golang-extended:
+        patterns:
+          - "golang.org/x/*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      ci-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: docker
+    directories:
+      - /
+      - /controller
+      - /controller/conformance
+      - /tests/qemu
+      - /tests/qemu/fixture
+    schedule:
+      interval: monthly

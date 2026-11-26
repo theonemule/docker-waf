@@ -11,13 +11,12 @@ VERSION="${VERSION#v}"
 (cd "$ROOT/dist" && sha256sum -c liteedge-linux-musl-x86_64.tar.gz.sha256)
 command -v docker >/dev/null 2>&1 || { echo 'Docker is required.' >&2; exit 1; }
 mkdir -p "$ROOT/dist"
-# Alpine is pinned by image manifest digest. The aports branch is pinned to
-# the v3.22 release line; the ISO only uses official Alpine APK repositories.
+# Both the Alpine image and the ISO build scripts are pinned by immutable IDs.
 docker run --rm --pull always \
   -e VERSION="$VERSION" \
   -e LITEEDGE_ISO_VARIANT="$ISO_VARIANT" \
   -e LITEEDGE_ISO_SOURCE=/src \
-  -e APORTS_REF="${APORTS_REF:-3.22-stable}" \
+  -e APORTS_COMMIT="$APORTS_COMMIT" \
   -e ALPINE_VERSION="$ALPINE_VERSION" \
   -e ALPINE_APK_MIRROR="${ALPINE_APK_MIRROR:-https://dl-2.alpinelinux.org/alpine}" \
   -v "$ROOT:/src" \

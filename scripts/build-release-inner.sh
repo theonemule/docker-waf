@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
-apk add --no-cache \
+# shellcheck source=scripts/install-build-apks.sh
+. /src/scripts/install-build-apks.sh
+install_build_apks \
   bash go build-base linux-headers autoconf automake libtool pkgconf git curl tar xz \
   coreutils findutils perl file \
   pcre2-dev openssl-dev zlib-dev libxml2-dev yajl-dev lmdb-dev curl-dev \

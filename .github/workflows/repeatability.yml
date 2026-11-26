@@ -1,0 +1,50 @@
+name: Three-pass clean build repeatability
+
+on:
+  push:
+    branches: [feature/dependency-ci-hardening]
+  workflow_dispatch:
+
+# Called workflow has gated publication jobs. GitHub requires the caller to
+# grant their declared permissions even though repeat_pass disables publication.
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  first:
+    if: github.run_attempt == 1
+    uses: ./.github/workflows/build-and-publish.yml
+    with:
+      repeat_pass: '1'
+  second:
+    needs: first
+    uses: ./.github/workflows/build-and-publish.yml
+    with:
+      repeat_pass: '2'
+  third:
+    needs: second
+    uses: ./.github/workflows/build-and-publish.yml
+    with:
+      repeat_pass: '3'
+  acceptance:
+    needs: [first, second, third]
+    if: always()
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
+    env:
+      FIRST: ${{ needs.first.result }}
+      SECOND: ${{ needs.second.result }}
+      THIRD: ${{ needs.third.result }}
+    steps:
+      - name: Require three first-attempt successes
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            echo "## Repeatability: $GITHUB_SHA"
+            echo "Pass 1: $FIRST"
+            echo "Pass 2: $SECOND"
+            echo "Pass 3: $THIRD"
+            echo "Run attempt: $GITHUB_RUN_ATTEMPT"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "$GITHUB_RUN_ATTEMPT" == 1 && "$FIRST" == success && "$SECOND" == success && "$THIRD" == success ]]

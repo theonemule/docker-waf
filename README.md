@@ -46,7 +46,7 @@ The management plane is intentionally small:
 - Bash command/control scripts plus a narrowly scoped Python 3 backup/archive utility
 - fcgiwrap to expose shell CGI behind NGINX
 - HTTP Basic Authentication using an OpenSSL SHA-512 password hash
-- Bootstrap 5.3.8 CSS pinned and verified during the appliance build
+- Bootstrap 5.3.9 CSS pinned and verified during the appliance build
 - Flat-file persistent configuration
 - No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
@@ -411,6 +411,35 @@ The Docker build is deliberately separate. The Dockerfile does not compile NGINX
 or ModSecurity. It only installs runtime libraries and expands the already-built
 appliance bundle into the image. This keeps the standalone appliance and container
 on the exact same binaries.
+
+Each ISO is built and uploaded in a separate matrix job. Both container images
+are built once and saved with checksums and immutable image IDs. Runtime, kind,
+QEMU and Gateway conformance qualification each load and verify those same
+images in separate jobs. A failed matrix job can be retried without repeating
+successful sibling jobs. Publication depends on all matrix jobs and final
+artifact verification; no qualification gate is optional.
+
+The first-Friday monthly regression uses this same workflow and never publishes.
+The separate controller workflow is an optional manual fast check. CI163 is a
+single runner, so the matrices deliberately run one job at a time; adding runners
+requires revisiting the shared host/test isolation constraints. QEMU download
+inputs are cached on the runner and verified against pinned hashes on every use;
+source compilation and test execution remain fresh.
+
+For release-readiness of build-pipeline changes, require three consecutive
+full, first-attempt qualification passes on the same Git commit. The
+repeatability workflow invokes the canonical build three times sequentially
+with distinct artifact versions and publication disabled. A failed pass stops
+the sequence, and the acceptance job refuses rerun attempts. A retry of a
+failed job can aid diagnosis but does not count toward this streak. Check the
+native build, both ISO variants, all four container qualification suites and
+final artifact verification on each run. No manually bypassed checks count.
+The ISO build pins its aports commit and records a SHA256 inventory of the
+staged APK packages alongside each ISO. Build-only APK installation uses
+bounded mirror fallback. Alpine stable repositories still receive security
+updates; input manifests distinguish package changes between runs. Identical
+ISO bytes are not currently guaranteed because APK repositories evolve and
+ISO signing keys are generated per build.
 
 Ordinary pushes to `master` and feature branches build and qualify CI artifacts
 without publication. To publish an explicitly authorized release, push the

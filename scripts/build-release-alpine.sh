@@ -14,17 +14,27 @@ SRC="$WORK/src"
 PKG="$WORK/pkg"
 PREFIX="$PKG/opt/liteedge"
 mkdir -p "$SRC" "$PREFIX"/{bin,sbin,lib,etc/nginx,etc/modsecurity,etc/crs,ui,cgi,share,licenses}
+# Retry transport failures only; never retry or skip a failed compile or test.
+retry_fetch() {
+  local attempt
+  for attempt in 1 2 3; do
+    "$@" && return 0
+    [[ "$attempt" == 3 ]] || sleep "$((attempt * 2))"
+  done
+  return 1
+}
 fetch_git() {
   local url="$1" commit="$2" dest="$3"
   git init -q "$dest"
   git -C "$dest" remote add origin "$url"
-  git -C "$dest" fetch -q --depth 1 origin "$commit"
+  retry_fetch timeout 180 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$dest" fetch -q --depth 1 origin "$commit"
   git -C "$dest" checkout -q FETCH_HEAD
+  test "$(git -C "$dest" rev-parse HEAD)" = "$commit"
 }
 echo "Building LiteEdge $VERSION for linux-musl-$ARCH"
 echo "[1/6] ModSecurity ${MODSECURITY_VERSION}"
 fetch_git https://github.com/owasp-modsecurity/ModSecurity.git "$MODSECURITY_COMMIT" "$SRC/ModSecurity"
-git -C "$SRC/ModSecurity" submodule update --init --recursive --depth 1
+retry_fetch timeout 180 git -c http.lowSpeedLimit=1024 -c http.lowSpeedTime=30 -C "$SRC/ModSecurity" submodule update --init --recursive --depth 1
 (
   cd "$SRC/ModSecurity"
   ./build.sh
@@ -36,7 +46,7 @@ echo "[2/6] ModSecurity-nginx ${MODSECURITY_NGINX_VERSION}"
 fetch_git https://github.com/owasp-modsecurity/ModSecurity-nginx.git "$MODSECURITY_NGINX_COMMIT" "$SRC/ModSecurity-nginx"
 git -C "$SRC/ModSecurity-nginx" apply "$ROOT/build/patches/modsecurity-nginx-shared-rules.patch"
 echo "[3/6] NGINX ${NGINX_VERSION}"
-curl -fsSL "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" -o "$WORK/nginx.tar.gz"
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz" -o "$WORK/nginx.tar.gz"
 echo "${NGINX_SHA256}  $WORK/nginx.tar.gz" | sha256sum -c -
 tar -xzf "$WORK/nginx.tar.gz" -C "$SRC"
 (
@@ -93,10 +103,12 @@ sed -i \
   "$PREFIX/etc/modsecurity/modsecurity.conf.template"
 printf '\nSecAuditLogFormat JSON\nSecAuditLogType Serial\nSecAuditLogParts AFHZ\nSecAuditEngine RelevantOnly\nSecTmpDir @RUN_DIR@\nSecDataDir @RUN_DIR@\n' >> "$PREFIX/etc/modsecurity/modsecurity.conf.template"
 cp -a "$ROOT/bin/." "$PREFIX/bin/"
+export GOTOOLCHAIN="go$GO_VERSION"
+[[ "$(go env GOVERSION)" == "go$GO_VERSION" ]]
 CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$PREFIX/bin/deadline-proxy" "$ROOT/runtime/deadline/main.go"
 cp -a "$ROOT/cgi/." "$PREFIX/cgi/"
 cp -a "$ROOT/ui/." "$PREFIX/ui/"
-curl -fsSL --retry 3 "https://cdn.jsdelivr.net/npm/bootstrap@${BOOTSTRAP_VERSION}/dist/css/bootstrap.min.css" -o "$PREFIX/ui/bootstrap.min.css"
+curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 "https://cdn.jsdelivr.net/npm/bootstrap@${BOOTSTRAP_VERSION}/dist/css/bootstrap.min.css" -o "$PREFIX/ui/bootstrap.min.css"
 echo "${BOOTSTRAP_SHA256}  $PREFIX/ui/bootstrap.min.css" | sha256sum -c -
 install -m 0755 "$ROOT/entrypoint.sh" "$PREFIX/entrypoint.sh"
 install -m 0644 "$ROOT/nginx/nginx.conf" "$PREFIX/etc/nginx/nginx.conf"

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for file in scripts/install-alpine.sh scripts/iso-admin-setup.sh scripts/build-vm-iso-inner.sh scripts/stage-iso-apks.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
+for file in scripts/install-alpine.sh scripts/install-build-apks.sh scripts/iso-admin-setup.sh scripts/build-vm-iso-inner.sh scripts/stage-iso-apks.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
   sh -n "$ROOT/$file"
 done
 bash -n "$ROOT/scripts/build-vm-iso.sh"
@@ -59,4 +59,9 @@ grep -Fq 'plan_dir="$(mktemp -d "$target/plan.XXXXXX")"' "$ROOT/scripts/stage-is
 grep -Fq -- '--recursive --simulate --url --output "$plan_dir"' "$ROOT/scripts/stage-iso-apks.sh"
 grep -Fq 'rmdir "$plan_dir"' "$ROOT/scripts/stage-iso-apks.sh"
 grep -Fq '[ "$planned" -ge 100 ]' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Eq '^APORTS_COMMIT=[0-9a-f]{40}$' "$ROOT/build/versions.env"
+grep -Fq 'origin "$APORTS_COMMIT"' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq 'rev-parse HEAD)" = "$APORTS_COMMIT"' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq 'iso-build-inputs.txt' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq 'install_build_apks' "$ROOT/scripts/build-release-inner.sh"
 echo 'PASS VM and bare-metal offline ISO profiles, install safety, BIOS/UEFI, dependency and first-boot contracts'

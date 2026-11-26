@@ -14,7 +14,7 @@ trap cleanup EXIT
 mkdir "$tmp/grpc"
 cp tests/fixtures/grpc/main.go "$tmp/grpc/"
 cat >"$tmp/grpc/Dockerfile" <<'DOCKER'
-FROM golang:1.26.10-bookworm AS build
+FROM golang:1.26.11-bookworm AS build
 COPY main.go /main.go
 RUN CGO_ENABLED=0 go build -trimpath -o /grpc /main.go
 FROM alpine:3.24

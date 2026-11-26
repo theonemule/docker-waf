@@ -2,10 +2,19 @@ name: Build and qualify LightEdge and Kubernetes controller
 
 on:
   push:
-    branches: [master, "feature/**"]
+    branches: [master, "feature/**", "!feature/dependency-ci-hardening"]
     tags:
       - "v3.*"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      repeat_pass:
+        description: "Non-publishing repeatability pass number"
+        required: true
+        type: string
+  schedule:
+    # Full non-publishing qualification, first Friday of each month (UTC).
+    - cron: "15 5 * * 5"
 
 permissions:
   contents: read
@@ -23,28 +32,44 @@ env:
 jobs:
   validate:
     runs-on: [self-hosted, Linux, X64, ci163-waf]
+    outputs:
+      enabled: ${{ steps.schedule.outputs.enabled }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Gate monthly schedule
+        id: schedule
+        shell: bash
+        run: |
+          if [[ "$GITHUB_EVENT_NAME" != schedule || $(date -u +%-d) -le 7 ]]; then
+            echo enabled=true >> "$GITHUB_OUTPUT"
+          else
+            echo enabled=false >> "$GITHUB_OUTPUT"
+            echo 'Skipped: not the first Friday.' >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.schedule.outputs.enabled == 'true'
         with:
           persist-credentials: false
           clean: true
 
       - name: Check runner prerequisites
+        if: steps.schedule.outputs.enabled == 'true'
         run: |
           set -euo pipefail
-          for tool in docker jq node python3 curl; do command -v "$tool"; done
+          for tool in docker jq node python3 curl flock; do command -v "$tool"; done
           docker compose version
           docker info --format '{{.Name}}'
           python3 -c 'import yaml'
       - name: Install ShellCheck in runner temporary directory
+        if: steps.schedule.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/lightedge-tools"
-          curl -fsSL --retry 3 https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP/lightedge-tools" --strip-components=1 shellcheck-v0.10.0/shellcheck
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 https://github.com/koalaman/shellcheck/releases/download/v0.10.0/shellcheck-v0.10.0.linux.x86_64.tar.xz | tar -xJ -C "$RUNNER_TEMP/lightedge-tools" --strip-components=1 shellcheck-v0.10.0/shellcheck
           echo "$RUNNER_TEMP/lightedge-tools" >> "$GITHUB_PATH"
 
       - name: Validate source
+        if: steps.schedule.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -55,6 +80,7 @@ jobs:
           ADMIN_PASSWORD=test docker compose config >/dev/null
 
       - name: Test installer and import contracts
+        if: steps.schedule.outputs.enabled == 'true'
         shell: bash
         run: |
           set -euo pipefail
@@ -84,9 +110,11 @@ jobs:
           python3 tests/test-provider.py
           python3 tests/test-ha-config.py
           python3 tests/test-nginx-generation.py
+          python3 tests/test-ci-pipeline.py
 
   build-appliance:
     needs: validate
+    if: needs.validate.outputs.enabled == 'true'
     runs-on: [self-hosted, Linux, X64, ci163-waf]
     timeout-minutes: 120
     outputs:
@@ -95,7 +123,7 @@ jobs:
       publish: ${{ steps.version.outputs.publish }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
@@ -103,13 +131,19 @@ jobs:
       - name: Select artifact version
         id: version
         shell: bash
+        env:
+          REPEAT_PASS: ${{ inputs.repeat_pass }}
         run: |
           set -euo pipefail
           source build/release.env
           version="$LITEEDGE_RELEASE"
           controller_version="$CONTROLLER_RELEASE"
           publish=false
-          if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
+          if [[ -n "$REPEAT_PASS" ]]; then
+            [[ "$REPEAT_PASS" =~ ^[123]$ ]] || { echo "Invalid repeatability pass" >&2; exit 1; }
+            version="$version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.repeat.$REPEAT_PASS"
+            controller_version="$controller_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT.repeat.$REPEAT_PASS"
+          elif [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
             [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "Tag must match build/release.env"; exit 1; }
             publish=true
           elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/master && "$(git log -1 --format=%s)" == "Publish release v$version" ]]; then
@@ -141,7 +175,7 @@ jobs:
           (cd dist && sha256sum install-alpine.sh install-docker.sh upgrade-liteedge.sh > installers.sha256)
 
       - name: Upload standalone appliance artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: docker-waf-v3-${{ steps.version.outputs.version }}-x86_64
           path: |
@@ -160,70 +194,69 @@ jobs:
   build-iso:
     needs: build-appliance
     runs-on: [self-hosted, Linux, X64, ci163-waf]
-    timeout-minutes: 60
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - variant: vm
+            script: build-vm-iso.sh
+            label: Build offline Alpine BIOS/UEFI installer ISO
+          - variant: baremetal
+            script: build-baremetal-iso.sh
+            label: Build minimal offline bare-metal installer ISO
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
 
       - name: Download freshly built standalone binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
-      - name: Build offline Alpine BIOS/UEFI installer ISO
+      - name: ${{ matrix.label }}
         shell: bash
+        env:
+          ISO_SCRIPT: ${{ matrix.script }}
+          ISO_VARIANT: ${{ matrix.variant }}
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
         run: |
           set -euo pipefail
-          ./scripts/build-vm-iso.sh "${{ needs.build-appliance.outputs.version }}"
-          (cd dist && sha256sum -c "liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256")
+          "./scripts/$ISO_SCRIPT" "$APPLIANCE_VERSION"
+          (cd dist && sha256sum -c "liteedge-$ISO_VARIANT-installer-$APPLIANCE_VERSION-x86_64.iso.sha256")
 
-      - name: Build minimal offline bare-metal installer ISO
-        shell: bash
-        run: |
-          set -euo pipefail
-          ./scripts/build-baremetal-iso.sh "${{ needs.build-appliance.outputs.version }}"
-          (cd dist && sha256sum -c "liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256")
-
-      - name: Upload bootable bare-metal installer artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload bootable installer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
+          name: docker-waf-${{ matrix.variant }}-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: |
-            dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso
-            dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256
-            dist/baremetal-iso-validation.log
+            dist/liteedge-${{ matrix.variant }}-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso
+            dist/liteedge-${{ matrix.variant }}-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256
+            dist/${{ matrix.variant }}-iso-validation.log
+            dist/${{ matrix.variant }}-iso-build-inputs.txt
           if-no-files-found: error
           retention-days: 30
-
-      - name: Upload bootable VM installer artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: docker-waf-vm-iso-${{ needs.build-appliance.outputs.version }}-x86_64
-          path: |
-            dist/liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso
-            dist/liteedge-vm-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso.sha256
-            dist/vm-iso-validation.log
-          if-no-files-found: error
-          retention-days: 30
+          compression-level: 0
 
   build-container:
     needs: build-appliance
     runs-on: [self-hosted, Linux, X64, ci163-waf]
-    timeout-minutes: 180
+    timeout-minutes: 30
     permissions:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
 
       - name: Download standalone appliance payload
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
@@ -240,7 +273,95 @@ jobs:
           set -euo pipefail
           docker build --no-cache --pull --build-arg CONTROLLER_VERSION="${{ needs.build-appliance.outputs.controller_version }}" -t lightedge-controller:ci controller
 
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          version: v3.19.0
+      - name: Package version-matched Kubernetes chart
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          # Run the chart variants also exercised by the manual controller check.
+          helm lint deploy/kubernetes/helm/lightedge --set provider.url=https://edge.example.com:9443
+          helm lint deploy/kubernetes/helm/lightedge --set appliance.enabled=true
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true >/dev/null
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPPorts[0].port=8080,appliance.extraHTTPPorts[0].targetPort=18080,controller.extraHTTPPorts[0]=8080' >/dev/null
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPSPorts[0].port=8443,appliance.extraHTTPSPorts[0].targetPort=18443,controller.extraHTTPSPorts[0]=8443' >/dev/null
+          helm lint deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set appliance.ha.enabled=true --set appliance.ha.existingClaim=shared-config --set appliance.ha.keySecret=ha-key
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set controller.enableGRPC=true --set 'appliance.extraTCPPorts[0].port=9000,appliance.extraTCPPorts[0].targetPort=19000,appliance.extraUDPPorts[0].port=9001,appliance.extraUDPPorts[0].targetPort=19001,appliance.extraTLSPorts[0].port=9444,appliance.extraTLSPorts[0].targetPort=19444,controller.extraTCPPorts[0]=9000,controller.extraUDPPorts[0]=9001,controller.extraTLSPorts[0]=9444' >/dev/null
+          chart="$(mktemp -d)"
+          trap 'rm -rf "$chart"' EXIT
+          cp -a deploy/kubernetes/helm/lightedge "$chart/"
+          sed -i "s|^  repository: .*lightedge-controller|  repository: $CONTROLLER_IMAGE|; s|^  tag: .*|  tag: \"v$CONTROLLER_VERSION\"|; s|^  image: .*docker-waf:.*|  image: $IMAGE_NAME:v$APPLIANCE_VERSION|" "$chart/lightedge/values.yaml"
+          sed -i "s|^  lightedge.blaize.net/appliance-version:.*|  lightedge.blaize.net/appliance-version: \"$APPLIANCE_VERSION\"|" "$chart/lightedge/Chart.yaml"
+          helm lint "$chart/lightedge" --set appliance.enabled=true
+          helm lint "$chart/lightedge" --set provider.url=https://edge.example.com:9443
+          mkdir -p qualification/package
+          helm package "$chart/lightedge" --version "$CONTROLLER_VERSION" --app-version "$CONTROLLER_VERSION" --destination qualification/package
+          (cd qualification/package && sha256sum ./*.tgz > chart.sha256)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
+          path: qualification/package/
+          if-no-files-found: error
+
+      - name: Export exact candidate images for qualification
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p qualified-images
+          docker tag "${IMAGE_NAME}:ci" "$IMAGE_NAME:v$APPLIANCE_VERSION"
+          docker tag lightedge-controller:ci "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION"
+          docker save "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" | gzip -1 > qualified-images/images.tar.gz
+          docker image inspect "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" --format '{{.Id}} {{index .RepoTags 0}}' > qualified-images/image-ids.txt
+          (cd qualified-images && sha256sum images.tar.gz image-ids.txt > SHA256SUMS)
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: qualified-images-${{ needs.build-appliance.outputs.version }}
+          path: qualified-images/
+          if-no-files-found: error
+          compression-level: 0
+
+
+  qualify-containers:
+    needs: [build-appliance, build-container]
+    runs-on: [self-hosted, Linux, X64, ci163-waf]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        suite: [runtime, kind, qemu, conformance]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          clean: true
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: qualified-images-${{ needs.build-appliance.outputs.version }}
+          path: qualified-images
+      - name: Load and verify exact candidate images
+        shell: bash
+        env:
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
+        run: |
+          set -euo pipefail
+          (cd qualified-images && sha256sum -c SHA256SUMS)
+          docker load -i qualified-images/images.tar.gz
+          docker image inspect "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" --format '{{.Id}}' > actual-image-ids.txt
+          diff <(awk '{print $1}' qualified-images/image-ids.txt) actual-image-ids.txt
+          docker tag "$IMAGE_NAME:v$APPLIANCE_VERSION" "$IMAGE_NAME:ci"
+          docker tag "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" lightedge-controller:ci
+
       - name: Smoke test image
+        if: matrix.suite == 'runtime'
         shell: bash
         run: |
           set -euo pipefail
@@ -264,6 +385,7 @@ jobs:
           exit 1
 
       - name: Migrate real previous release state
+        if: matrix.suite == 'runtime'
         shell: bash
         run: |
           set -euo pipefail
@@ -274,6 +396,7 @@ jobs:
           bash tests/test-upgrade-compose-live.sh "${IMAGE_NAME}:ci" ghcr.io/theonemule/docker-waf:v3.1.6
 
       - name: End-to-end management API regressions in an isolated container
+        if: matrix.suite == 'runtime'
         shell: bash
         run: |
           set -euo pipefail
@@ -298,47 +421,56 @@ jobs:
           printf 'FROM %s:ci\nUSER root\nCOPY tests/fixtures/dehydrated-ha-test.sh /opt/liteedge/bin/dehydrated\nRUN chmod 755 /opt/liteedge/bin/dehydrated\nUSER 10001:10001\n' "$IMAGE_NAME" | docker build --no-cache -t liteedge:ha-acme-test -f - .
           bash tests/test-shared-config-ha.sh liteedge:ha-acme-test offline-acme
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        if: matrix.suite != 'runtime'
         with:
           version: v3.19.0
-      - uses: azure/setup-kubectl@v4
+      - uses: azure/setup-kubectl@bda439f5f36b99b262ebdcd3613869bddb064c8e # v5.2.0
+        if: matrix.suite != 'runtime'
         with:
           version: v1.34.3
       - name: Install kind
+        if: matrix.suite == 'kind' || matrix.suite == 'conformance'
         run: |
-          curl -fsSL https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64 -o "$RUNNER_TEMP/kind"
+          curl -fsSL --retry 3 --connect-timeout 10 --max-time 120 https://kind.sigs.k8s.io/dl/v0.30.0/kind-linux-amd64 -o "$RUNNER_TEMP/kind"
           mkdir -p "$RUNNER_TEMP/lightedge-tools"
           install -m 0755 "$RUNNER_TEMP/kind" "$RUNNER_TEMP/lightedge-tools/kind"
           echo "$RUNNER_TEMP/lightedge-tools" >> "$GITHUB_PATH"
       - name: Kubernetes Ingress and Gateway smoke test
+        if: matrix.suite == 'kind'
         run: bash tests/test-kubernetes-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
       - name: Kubernetes multi-node HA and recovery
+        if: matrix.suite == 'kind'
         run: HA_MULTINODE=1 bash tests/test-shared-config-ha-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
       - name: Kubernetes Gateway partitions
+        if: matrix.suite == 'kind'
         run: bash tests/test-gateway-partitions-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
       - name: Kubernetes backend TLS
+        if: matrix.suite == 'kind'
         run: bash tests/test-gateway-backend-tls-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
       - name: Kubernetes extra routes
+        if: matrix.suite == 'kind'
         run: bash tests/test-extra-routes-kind.sh "${IMAGE_NAME}:ci" lightedge-controller:ci
 
       - name: Three-VM QEMU multi-protocol regression
+        if: matrix.suite == 'qemu'
         timeout-minutes: 45
         shell: bash
         run: |
           set -euo pipefail
-          export QEMU_CACHE_DIR
-          QEMU_CACHE_DIR="$(mktemp -d "$RUNNER_TEMP/lightedge-qemu.XXXXXX")"
-          trap 'rm -rf "$QEMU_CACHE_DIR"' EXIT
+          # Reuse immutable downloaded test inputs; every file is hash-verified.
+          export QEMU_CACHE_DIR="$HOME/.cache/lightedge-qemu"
           bash tests/test-qemu-kubernetes.sh "${IMAGE_NAME}:ci" lightedge-controller:ci "$PWD/qemu-qualification"
       - name: Preserve QEMU regression evidence
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.suite == 'qemu'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: lightedge-qemu-qualification-${{ needs.build-appliance.outputs.version }}
+          name: lightedge-qemu-qualification-${{ needs.build-appliance.outputs.version }}-attempt-${{ github.run_attempt }}
           path: qemu-qualification/
           if-no-files-found: warn
 
       - name: Full Gateway API core qualification
+        if: matrix.suite == 'conformance'
         timeout-minutes: 70
         shell: bash
         run: |
@@ -360,80 +492,39 @@ jobs:
           python3 tests/check-conformance-report.py qualification/grpc.yaml GATEWAY-GRPC "$CONFORMANCE_VERSION"
 
       - name: Preserve qualification reports
-        if: always()
-        uses: actions/upload-artifact@v4
+        if: always() && matrix.suite == 'conformance'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: gateway-api-qualification-${{ needs.build-appliance.outputs.version }}
+          name: gateway-api-qualification-${{ needs.build-appliance.outputs.version }}-attempt-${{ github.run_attempt }}
           path: qualification/
           if-no-files-found: warn
 
-      - name: Package version-matched Kubernetes chart
-        shell: bash
-        env:
-          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
-          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
-        run: |
-          set -euo pipefail
-          chart="$(mktemp -d)"
-          cp -a deploy/kubernetes/helm/lightedge "$chart/"
-          sed -i "s|^  repository: .*lightedge-controller|  repository: $CONTROLLER_IMAGE|; s|^  tag: .*|  tag: \"v$CONTROLLER_VERSION\"|; s|^  image: .*docker-waf:.*|  image: $IMAGE_NAME:v$APPLIANCE_VERSION|" "$chart/lightedge/values.yaml"
-          sed -i "s|^  lightedge.blaize.net/appliance-version:.*|  lightedge.blaize.net/appliance-version: \"$APPLIANCE_VERSION\"|" "$chart/lightedge/Chart.yaml"
-          helm lint "$chart/lightedge" --set appliance.enabled=true
-          helm lint "$chart/lightedge" --set provider.url=https://edge.example.com:9443
-          mkdir -p qualification/package
-          helm package "$chart/lightedge" --version "$CONTROLLER_VERSION" --app-version "$CONTROLLER_VERSION" --destination qualification/package
-          (cd qualification/package && sha256sum ./*.tgz > chart.sha256)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
-          path: qualification/package/
-          if-no-files-found: error
-
-      - name: Export exact qualified images for download
-        shell: bash
-        env:
-          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
-          CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
-        run: |
-          set -euo pipefail
-          mkdir -p qualified-images
-          docker tag "${IMAGE_NAME}:ci" "$IMAGE_NAME:v$APPLIANCE_VERSION"
-          docker tag lightedge-controller:ci "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION"
-          docker save "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" | gzip -1 > qualified-images/images.tar.gz
-          docker image inspect "$IMAGE_NAME:v$APPLIANCE_VERSION" "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION" --format '{{.Id}} {{index .RepoTags 0}}' > qualified-images/image-ids.txt
-          (cd qualified-images && sha256sum images.tar.gz image-ids.txt > SHA256SUMS)
-      - uses: actions/upload-artifact@v4
-        with:
-          name: qualified-images-${{ needs.build-appliance.outputs.version }}
-          path: qualified-images/
-          if-no-files-found: error
-
   verify-artifacts:
-    needs: [build-appliance, build-container, build-iso]
+    needs: [build-appliance, build-container, build-iso, qualify-containers]
     runs-on: [self-hosted, Linux, X64, ci163-waf]
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-vm-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
           path: chart
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: qualified-images-${{ needs.build-appliance.outputs.version }}
           path: qualified-images
@@ -449,6 +540,8 @@ jobs:
           (cd qualified-images && sha256sum -c SHA256SUMS)
           test -s "dist/liteedge-vm-installer-$APPLIANCE_VERSION-x86_64.iso"
           test -s "dist/liteedge-baremetal-installer-$APPLIANCE_VERSION-x86_64.iso"
+          test -s dist/vm-iso-build-inputs.txt
+          test -s dist/baremetal-iso-build-inputs.txt
           test -s "chart/lightedge-$CONTROLLER_VERSION.tgz"
           test -s dist/liteedge-linux-musl-x86_64.tar.gz
           test -s qualified-images/images.tar.gz
@@ -474,11 +567,11 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: qualified-images-${{ needs.build-appliance.outputs.version }}
           path: qualified-images
@@ -525,29 +618,29 @@ jobs:
       contents: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           clean: true
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
       - name: Download VM installer ISO
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-vm-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
       - name: Download bare-metal installer ISO
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: docker-waf-baremetal-iso-${{ needs.build-appliance.outputs.version }}-x86_64
           path: dist
 
       - name: Download matched Helm chart
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
           path: dist

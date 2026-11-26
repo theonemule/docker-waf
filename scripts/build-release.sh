@@ -23,6 +23,8 @@ rm -f "$ROOT/dist/liteedge-linux-musl-"*.tar.gz "$ROOT/dist/liteedge-linux-musl-
 "${DOCKER[@]}" run --rm --pull always \
   -e VERSION="$VERSION" \
   -e BUILD_JOBS="$BUILD_JOBS" \
+  -e ALPINE_VERSION="$ALPINE_VERSION" \
+  -e ALPINE_APK_MIRROR="${ALPINE_APK_MIRROR:-https://dl-2.alpinelinux.org/alpine}" \
   -v "$ROOT:/src" \
   -w /src \
   "${ALPINE_BUILD_IMAGE:-docker.io/library/alpine:${ALPINE_VERSION}@${ALPINE_DIGEST}}" \

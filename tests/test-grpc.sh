@@ -3,7 +3,7 @@ set -euo pipefail
 image="$1";name="le-grpc-$(openssl rand -hex 4)";tmp="$(mktemp -d)";builder=""
 cleanup(){ rc=$?;if ((rc));then cat "$tmp/result" "$tmp/headers" 2>/dev/null||true;docker logs "$name" --tail 80||true;fi;[[ -z "$builder" ]]||docker rm -fv "$builder" >/dev/null 2>&1||true;docker rm -fv "$name" >/dev/null 2>&1||true;rm -rf "$tmp"; }
 trap cleanup EXIT
-builder=$(docker create golang:1.26.10-bookworm sh -ec 'CGO_ENABLED=0 go build -o /grpc /main.go')
+builder=$(docker create golang:1.26.11-bookworm sh -ec 'CGO_ENABLED=0 go build -o /grpc /main.go')
 docker cp tests/fixtures/grpc/main.go "$builder:/main.go";docker start -a "$builder";docker cp "$builder:/grpc" "$tmp/grpc"
 docker run -d --name "$name" -e ADMIN_PASSWORD=grpc-test -p 127.0.0.1::9443 -p 127.0.0.1::8080 "$image" >/dev/null
 admin="https://127.0.0.1:$(docker port "$name" 9443/tcp|cut -d: -f2)"
