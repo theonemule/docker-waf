@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-for file in scripts/install-alpine.sh scripts/iso-admin-setup.sh scripts/build-vm-iso-inner.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
+for file in scripts/install-alpine.sh scripts/iso-admin-setup.sh scripts/build-vm-iso-inner.sh scripts/stage-iso-apks.sh scripts/vm-firstboot.sh scripts/vm-iso-install.sh scripts/genapkovl-liteedge.sh scripts/mkimg.liteedge.sh scripts/baremetal-iso-install.sh; do
   sh -n "$ROOT/$file"
 done
 bash -n "$ROOT/scripts/build-vm-iso.sh"
@@ -48,4 +48,11 @@ grep -Fq 'mounted partitions' "$ROOT/scripts/baremetal-iso-install.sh"
 grep -Fq 'offline Alpine' "$ROOT/scripts/baremetal-iso-install.sh"
 grep -Fq 'liteedge-baremetal-installer' "$ROOT/scripts/mkimg.liteedge.sh"
 grep -Fq 'Build minimal offline bare-metal installer ISO' "$ROOT/.github/workflows/build-and-publish.yml"
+grep -Fq 'stage-iso-apks.sh' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq -- '--repository "$work/repository"' "$ROOT/scripts/build-vm-iso-inner.sh"
+grep -Fq 'apk verify "$part"' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq 'abuild-sign "$APK_STAGE/APKINDEX.tar.gz"' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq -- '--rewrite-arch x86_64' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq -- '--no-network fetch --recursive --simulate' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq -- '--speed-time 15' "$ROOT/scripts/stage-iso-apks.sh"
 echo 'PASS VM and bare-metal offline ISO profiles, install safety, BIOS/UEFI, dependency and first-boot contracts'

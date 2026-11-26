@@ -9,7 +9,7 @@ echo "ISO APK mirror: $mirror"
 timeout 300 apk add --no-cache \
     git openssl ca-certificates alpine-conf abuild apk-tools \
     fakeroot syslinux xorriso squashfs-tools grub mtools \
-    coreutils findutils bash tar gzip
+    coreutils findutils bash tar gzip curl
 export PACKAGER="LiteEdge Build <build@liteedge.invalid>"
 # Generated keys sign the ISO's on-media APK index, never bundled as private.
 abuild-keygen -a -n >/dev/null
@@ -32,15 +32,17 @@ git clone -q --depth 1 --filter=blob:none --sparse --branch "$APORTS_REF" \
 git -C "$work/aports" sparse-checkout set scripts
 cp /src/scripts/mkimg.liteedge.sh "$work/aports/scripts/mkimg.liteedge.sh"
 cp /src/scripts/genapkovl-liteedge.sh "$work/aports/scripts/genapkovl-liteedge.sh"
+# All package transfers happen first, with per-file mirror fallback.
+# mkimage then reads only the locally signed staging repository.
+timeout --kill-after=30s 20m /bin/sh /src/scripts/stage-iso-apks.sh "$repo" "$profile" "$work/aports/scripts" "$work/repository"
 cd "$work/aports/scripts"
-timeout --kill-after=30s 20m ./mkimage.sh \
+timeout --kill-after=30s 10m ./mkimage.sh \
     --tag "$VERSION" \
     --outdir "$out" \
     --workdir "$work/build" \
     --arch x86_64 \
     --profile "$profile" \
-    --repository "$repo/main" \
-    --repository "$repo/community"
+    --repository "$work/repository"
 output="$out/liteedge-${variant}-installer-${VERSION}-x86_64.iso"
 test -s "$output"
 (cd "$out" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")

@@ -169,6 +169,7 @@ spec:
             exec:
               command: [python3, /opt/liteedge/bin/ha_config.py, ready]
             periodSeconds: 2
+            timeoutSeconds: 5
             failureThreshold: 1
             {{- else }}
             tcpSocket: {port: admin}

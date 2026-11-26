@@ -28,6 +28,7 @@ cleanup(){
      k --request-timeout=15s -n lightedge-system exec "test-lightedge-appliance-$i" -c appliance -- sh -c 'tail -500 /data/logs/streams.jsonl 2>/dev/null || true' >"evidence/appliance-$i-streams.jsonl" 2>&1
      k --request-timeout=15s -n lightedge-system exec "test-lightedge-appliance-$i" -c appliance -- sh -c 'tail -100 /data/logs/ha-worker.log 2>/dev/null || true; jq -c "{revision,digest}" /data/.liteedge-ha-applied.json /ha/current.json' >"evidence/appliance-$i-ha.txt" 2>&1
    done
+   k --request-timeout=15s -n lightedge-system get endpointslices -o yaml >evidence/endpointslices.yaml 2>&1
    k --request-timeout=15s get events -A --sort-by=.metadata.creationTimestamp >evidence/events.txt 2>&1
  fi
  for n in 1 2 3;do
@@ -221,7 +222,29 @@ negative_cases
 wait_members 2
 k -n lightedge-system scale statefulset/test-lightedge-appliance --replicas=1
 k -n lightedge-system wait --for=delete pod/test-lightedge-appliance-1 --timeout=180s
-for i in $(seq 1 12);do request "$((2+i%2))" >/dev/null;done
+# Pod deletion is not an atomic kube-proxy/EndpointSlice update. Measure the
+# transition separately, then require every post-convergence sample to pass.
+started=$SECONDS
+: >evidence/failover-convergence.log
+converged=false
+while (( SECONDS-started < 30 ));do
+  endpoints=$(k --request-timeout=3s -n lightedge-system get endpointslices -l "kubernetes.io/service-name=$service" -o json) || { sleep 1;continue; }
+  printf '%s %s\n' "$((SECONDS-started))" "$(jq -c '[.items[].endpoints[]|{target:.targetRef.name,conditions}]' <<<"$endpoints")" >>evidence/failover-convergence.log
+  if jq -e '[.items[].endpoints[]] | length==1 and all(.[];.targetRef.name=="test-lightedge-appliance-0" and .conditions.ready==true and .conditions.terminating!=true)' <<<"$endpoints" >/dev/null;then
+    if request 2 >evidence/failover-node2.json 2>>evidence/failover-convergence.log &&
+       request 3 >evidence/failover-node3.json 2>>evidence/failover-convergence.log &&
+       jq -se 'length==2 and all(.[];.message=="Hello World")' evidence/failover-node{2,3}.json >/dev/null &&
+       (( SECONDS-started < 30 ));then
+      converged=true;break
+    fi
+  fi
+  sleep 1
+done
+$converged || { echo 'FAIL public service did not converge within 30 seconds of replica removal' >&2;exit 1; }
+echo "PASS public service convergence after replica removal: $((SECONDS-started))s"
+: >evidence/failover-requests.jsonl
+for i in $(seq 1 12);do request "$((2+i%2))" >>evidence/failover-requests.jsonl;echo >>evidence/failover-requests.jsonl;done
+jq -se 'length==12 and all(.[];.message=="Hello World")' evidence/failover-requests.jsonl >/dev/null
 echo 'PASS public traffic survives appliance removal'
 matrix single-replica 1 8
 k -n apps patch httproute hello --type=json -p '[{"op":"add","path":"/spec/rules/0/filters","value":[{"type":"ResponseHeaderModifier","responseHeaderModifier":{"set":[{"name":"X-Lab-Revision","value":"two"}]}}]}]'
