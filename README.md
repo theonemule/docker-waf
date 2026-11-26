@@ -412,14 +412,16 @@ or ModSecurity. It only installs runtime libraries and expands the already-built
 appliance bundle into the image. This keeps the standalone appliance and container
 on the exact same binaries.
 
-Successful `main` builds publish the container to:
+Ordinary pushes to `master` and feature branches build and qualify CI artifacts
+without publication. To publish an explicitly authorized release, push the
+matching `v3.*` tag, or push a commit to `master` whose exact subject is
+`Publish release v<version>` (matching `build/release.env`). The latter creates
+the release tag from the qualified commit after all gates pass.
 
-    ghcr.io/theonemule/docker-waf:latest
-    ghcr.io/theonemule/docker-waf:v3
-    ghcr.io/theonemule/docker-waf:sha-<commit>
-
-Tags matching `v3.*` publish the matching immutable container tag and attach the
-standalone appliance bundle and installers to a GitHub Release.
+The release workflow publishes the versioned appliance and controller images,
+the appliance aliases `v3` and `latest`, the controller alias `v1`, and attaches
+the checksummed standalone appliance, both ISOs, installers and Helm chart
+to a GitHub Release.
 ## Logs, alert rules and collection
 
 The **Logs** page combines structured NGINX access events, normalized ModSecurity

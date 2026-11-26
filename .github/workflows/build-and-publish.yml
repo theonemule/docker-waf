@@ -92,6 +92,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       controller_version: ${{ steps.version.outputs.controller_version }}
+      publish: ${{ steps.version.outputs.publish }}
 
     steps:
       - uses: actions/checkout@v4
@@ -107,14 +108,20 @@ jobs:
           source build/release.env
           version="$LITEEDGE_RELEASE"
           controller_version="$CONTROLLER_RELEASE"
+          publish=false
           if [[ "$GITHUB_REF" == refs/tags/v3.* ]]; then
             [[ "$GITHUB_REF_NAME" == "v$version" ]] || { echo "Tag must match build/release.env"; exit 1; }
+            publish=true
+          elif [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/master && "$(git log -1 --format=%s)" == "Publish release v$version" ]]; then
+            # Explicit maintainer release commit; ordinary master pushes never publish.
+            publish=true
           else
             version="$version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
             controller_version="$controller_version-ci.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "controller_version=$controller_version" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
 
       - name: Build standalone appliance payload from source
         shell: bash
@@ -460,13 +467,17 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   publish-images:
-    if: startsWith(github.ref, 'refs/tags/v3.')
+    if: needs.build-appliance.outputs.publish == 'true'
     needs: [build-appliance, build-container, build-iso, verify-artifacts]
     runs-on: [self-hosted, Linux, X64, ci163-waf]
     permissions:
       contents: read
       packages: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: true
       - uses: actions/download-artifact@v4
         with:
           name: qualified-images-${{ needs.build-appliance.outputs.version }}
@@ -479,8 +490,19 @@ jobs:
           CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
         run: |
           set -euo pipefail
+          # Never replace an existing release tag pointing at different source.
+          tag="v$APPLIANCE_VERSION"
+          refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"
+          existing="$(awk -v ref="refs/tags/$tag^{}" '$2 == ref {print $1}' <<< "$refs")"
+          if [[ -z "$existing" ]]; then
+            existing="$(awk -v ref="refs/tags/$tag" '$2 == ref {print $1}' <<< "$refs")"
+          fi
+          [[ -z "$existing" || "$existing" == "$GITHUB_SHA" ]] || { echo "Release tag points to different source" >&2; exit 1; }
           (cd qualified-images && sha256sum -c SHA256SUMS)
           docker load -i qualified-images/images.tar.gz
+          export DOCKER_CONFIG
+          DOCKER_CONFIG="$(mktemp -d "$RUNNER_TEMP/lightedge-registry.XXXXXX")"
+          trap 'rm -rf "$DOCKER_CONFIG"' EXIT
           echo "$GH_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker push "$IMAGE_NAME:v$APPLIANCE_VERSION"
           docker push "$CONTROLLER_IMAGE:v$CONTROLLER_VERSION"
@@ -492,13 +514,17 @@ jobs:
           docker push "$CONTROLLER_IMAGE:v1"
 
   publish-release:
-    if: startsWith(github.ref, 'refs/tags/v3.')
+    if: needs.build-appliance.outputs.publish == 'true'
     needs: [build-appliance, build-container, build-iso, verify-artifacts, publish-images]
     runs-on: [self-hosted, Linux, X64, ci163-waf]
     permissions:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          clean: true
       - uses: actions/download-artifact@v4
         with:
           name: docker-waf-v3-${{ needs.build-appliance.outputs.version }}-x86_64
@@ -522,13 +548,26 @@ jobs:
           name: lightedge-helm-${{ needs.build-appliance.outputs.version }}
           path: dist
 
-      - name: Publish GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Install checksum-pinned GitHub CLI
         shell: bash
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME}"
+          tool_dir="$(mktemp -d "$RUNNER_TEMP/lightedge-gh.XXXXXX")"
+          curl -fsSL --retry 3 https://github.com/cli/cli/releases/download/v2.106.0/gh_2.106.0_linux_amd64.tar.gz -o "$tool_dir/gh.tar.gz"
+          echo "a476449fa9625413c54a3734eded62e9e480e49f421ff08e7f3b3879c059a033  $tool_dir/gh.tar.gz" | sha256sum -c -
+          tar -xzf "$tool_dir/gh.tar.gz" -C "$tool_dir" --strip-components=2 gh_2.106.0_linux_amd64/bin/gh
+          rm "$tool_dir/gh.tar.gz"
+          "$tool_dir/gh" --version
+          echo "$tool_dir" >> "$GITHUB_PATH"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLIANCE_VERSION: ${{ needs.build-appliance.outputs.version }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="v$APPLIANCE_VERSION"
           (cd dist && sha256sum -c *.sha256)
           test -s "dist/liteedge-linux-musl-x86_64.tar.gz"
           test -s "dist/upgrade-liteedge.sh"
@@ -537,7 +576,6 @@ jobs:
           test -s "dist/liteedge-baremetal-installer-${{ needs.build-appliance.outputs.version }}-x86_64.iso"
           if gh release view "$tag" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             gh release upload "$tag" dist/* --clobber --repo "${GITHUB_REPOSITORY}"
-            gh release edit "$tag" --target "$GITHUB_SHA" --repo "${GITHUB_REPOSITORY}"
           else
             gh release create "$tag" dist/* \
               --repo "${GITHUB_REPOSITORY}" \
