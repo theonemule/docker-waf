@@ -14,7 +14,7 @@ permissions:
 # Only trusted repository pushes and explicit dispatches execute on it.
 concurrency:
   group: lightedge-build
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish release v') }}
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/docker-waf
@@ -490,6 +490,10 @@ jobs:
           CONTROLLER_VERSION: ${{ needs.build-appliance.outputs.controller_version }}
         run: |
           set -euo pipefail
+          # A superseded master release must never publish stale artifacts.
+          if [[ "$GITHUB_REF" == refs/heads/master ]]; then
+            [[ "$(git ls-remote origin refs/heads/master | cut -f1)" == "$GITHUB_SHA" ]] || { echo "Release commit is no longer master" >&2; exit 1; }
+          fi
           # Never replace an existing release tag pointing at different source.
           tag="v$APPLIANCE_VERSION"
           refs="$(git ls-remote --tags origin "refs/tags/$tag" "refs/tags/$tag^{}")"

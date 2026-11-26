@@ -1,6 +1,12 @@
 #!/bin/sh
 set -eu
-apk add --no-cache \
+mirror="${ALPINE_APK_MIRROR:-https://dl-2.alpinelinux.org/alpine}"
+mirror="${mirror%/}"
+case "$mirror" in https://*) ;; *) echo 'ALPINE_APK_MIRROR must use HTTPS' >&2; exit 1 ;; esac
+repo="$mirror/v${ALPINE_VERSION:-3.22}"
+printf '%s\n' "$repo/main" "$repo/community" >/etc/apk/repositories
+echo "ISO APK mirror: $mirror"
+timeout 300 apk add --no-cache \
     git openssl ca-certificates alpine-conf abuild apk-tools \
     fakeroot syslinux xorriso squashfs-tools grub mtools \
     coreutils findutils bash tar gzip
@@ -27,14 +33,14 @@ git -C "$work/aports" sparse-checkout set scripts
 cp /src/scripts/mkimg.liteedge.sh "$work/aports/scripts/mkimg.liteedge.sh"
 cp /src/scripts/genapkovl-liteedge.sh "$work/aports/scripts/genapkovl-liteedge.sh"
 cd "$work/aports/scripts"
-./mkimage.sh \
+timeout --kill-after=30s 20m ./mkimage.sh \
     --tag "$VERSION" \
     --outdir "$out" \
     --workdir "$work/build" \
     --arch x86_64 \
     --profile "$profile" \
-    --repository "https://dl-cdn.alpinelinux.org/alpine/v3.22/main" \
-    --repository "https://dl-cdn.alpinelinux.org/alpine/v3.22/community"
+    --repository "$repo/main" \
+    --repository "$repo/community"
 output="$out/liteedge-${variant}-installer-${VERSION}-x86_64.iso"
 test -s "$output"
 (cd "$out" && sha256sum "$(basename "$output")" > "$(basename "$output").sha256")
