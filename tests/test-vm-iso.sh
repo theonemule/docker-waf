@@ -55,4 +55,8 @@ grep -Fq 'abuild-sign "$APK_STAGE/APKINDEX.tar.gz"' "$ROOT/scripts/stage-iso-apk
 grep -Fq -- '--rewrite-arch x86_64' "$ROOT/scripts/stage-iso-apks.sh"
 grep -Fq -- '--no-network fetch --recursive --simulate' "$ROOT/scripts/stage-iso-apks.sh"
 grep -Fq -- '--speed-time 15' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq 'plan_dir="$(mktemp -d "$target/plan.XXXXXX")"' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq -- '--recursive --simulate --url --output "$plan_dir"' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq 'rmdir "$plan_dir"' "$ROOT/scripts/stage-iso-apks.sh"
+grep -Fq '[ "$planned" -ge 100 ]' "$ROOT/scripts/stage-iso-apks.sh"
 echo 'PASS VM and bare-metal offline ISO profiles, install safety, BIOS/UEFI, dependency and first-boot contracts'

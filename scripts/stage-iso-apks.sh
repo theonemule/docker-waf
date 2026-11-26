@@ -53,11 +53,18 @@ packages="$(sh -e -c '
 ' sh "$aports" "$profile")"
 # Keep dependency selection tied to the signed indexes from one coherent mirror.
 apk --timeout 15 update
+# --url alone performs downloads and silently omits files already in cwd.
+# Simulate against an explicitly empty output directory, even when the
+# checkout contains APKs left by an earlier ISO build.
+plan_dir="$(mktemp -d "$target/plan.XXXXXX")"
 # shellcheck disable=SC2086
-apk fetch --from repositories --recursive --url $packages >"$target/package-urls.txt"
+apk fetch --from repositories --recursive --simulate --url --output "$plan_dir" $packages >"$target/package-urls.txt"
+rmdir "$plan_dir"
 test -s "$target/package-urls.txt"
 sort -u "$target/package-urls.txt" -o "$target/package-urls.txt"
-echo "Staging $(wc -l <"$target/package-urls.txt") signed packages for $profile"
+planned="$(wc -l <"$target/package-urls.txt" | tr -d ' ')"
+[ "$planned" -ge 100 ] || { echo "Incomplete $profile dependency plan: only $planned packages" >&2; exit 1; }
+echo "Staging $planned signed packages for $profile"
 # xargs reports any failed child. Never create an index after a partial fetch.
 xargs -r -P 6 -n 1 /bin/sh /src/scripts/stage-iso-apks.sh fetch-one <"$target/package-urls.txt"
 expected="$(wc -l <"$target/package-urls.txt" | tr -d ' ')"

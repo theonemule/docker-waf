@@ -14,7 +14,7 @@ permissions:
 # Only trusted repository pushes and explicit dispatches execute on it.
 concurrency:
   group: lightedge-build
-  cancel-in-progress: ${{ github.ref == 'refs/heads/master' && github.event_name == 'push' && startsWith(github.event.head_commit.message, 'Publish release v') }}
+  cancel-in-progress: false
 
 env:
   IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/docker-waf
