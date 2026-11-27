@@ -40,6 +40,9 @@ assert "github.run_attempt" in raw
 assert "scripts/security-scan.sh" in raw and "govulncheck ./..." in raw
 assert "test-security-inputs.py" in raw
 assert "-fuzz FuzzDecode" in raw
+assert "test-provider-dns-pinning.sh" in raw
+assert "!feature/security-hardening" in workflow["on"]["push"]["branches"]
+assert "feature/security-hardening" in yaml.load((root / ".github/workflows/repeatability.yml").read_text(), Loader=yaml.BaseLoader)["on"]["push"]["branches"]
 assert raw.count("Build standalone appliance payload from source") == 1
 assert raw.count("Rebuild Kubernetes controller from source") == 1
 assert "GITHUB_EVENT_NAME" in raw and '== push' in raw

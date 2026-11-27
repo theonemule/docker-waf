@@ -452,6 +452,7 @@ jobs:
           bash tests/test-grpc.sh "${IMAGE_NAME}:ci"
           bash tests/test-stream-routes.sh "${IMAGE_NAME}:ci"
           bash tests/test-provider-integration.sh "${IMAGE_NAME}:ci"
+          bash tests/test-provider-dns-pinning.sh "${IMAGE_NAME}:ci"
           bash tests/test-shared-config-ha.sh "${IMAGE_NAME}:ci"
           printf 'FROM %s:ci\nUSER root\nCOPY tests/fixtures/dehydrated-ha-test.sh /opt/liteedge/bin/dehydrated\nRUN chmod 755 /opt/liteedge/bin/dehydrated\nUSER 10001:10001\n' "$IMAGE_NAME" | docker build --no-cache -t liteedge:ha-acme-test -f - .
           bash tests/test-shared-config-ha.sh liteedge:ha-acme-test offline-acme

@@ -133,3 +133,11 @@ The feature/security-hardening branch uses the existing three-pass wrapper;
 no candidate release is published.
 
 The initial Trivy scan detected fixable zlib and OpenSSL package advisories below the high/critical threshold. Both runtime Dockerfiles explicitly upgrade base packages from their supported signed Alpine repositories before installation.
+
+Live migration regression: a real Docker DNS alias resolved into an authorized
+IP, the provider persisted only the IP, the route forwarded HTTP successfully,
+a simulated legacy DNS record returned 503, and a fresh reconciliation restored
+traffic. A resolvable name in the approved DNS suffix but outside the permitted
+IP scope was rejected without changing the active route. Shared HA tests also
+passed on the updated runtime, including CAS, interrupted-writer recovery,
+signed revision restoration and retention.
