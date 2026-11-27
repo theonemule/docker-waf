@@ -12,6 +12,8 @@ cleanup() {
   if [ "$rc" != 0 ]; then
     kubectl -n lightedge-system get pods || true
     kubectl -n lightedge-system logs deploy/test-lightedge --tail=50 || true
+    kubectl -n lightedge-system logs deploy/test-lightedge-appliance -c appliance --tail=50 || true
+    kubectl -n lightedge-system logs deploy/test-lightedge-appliance -c appliance --previous --tail=50 || true
   fi
   kind delete cluster --name "$name" || true
   rm -rf "$tmp"

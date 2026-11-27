@@ -39,3 +39,22 @@ grep -Fq 'Current password is incorrect' "$TEMP/response"
 printf '%s\n' "$NEW" "$OLD" "$OLD" | DATA_DIR="$TEMP" "$helper" change-password > "$TEMP/response"
 grep -Fq 'Password updated successfully' "$TEMP/response"
 echo 'PASS: password update, wrong current, mismatch, minimum length, atomic persistent file and second update'
+
+# Exercise the actual entrypoint bootstrap block, including Kubernetes Secret
+# file terminators, without starting the appliance or touching persistent data.
+sed -n '/^ADMIN_USER=/,/^unset ADMIN_PASSWORD/p' "$ROOT/entrypoint.sh" > "$TEMP/bootstrap.sh"
+for suffix in '' $'\n' $'\r\n'; do
+  mkdir -p "$TEMP/bootstrap/auth"; rm -f "$TEMP/bootstrap/auth/.htpasswd"
+  DATA_DIR="$TEMP/bootstrap" ADMIN_PASSWORD="$OLD$suffix" bash -eu "$TEMP/bootstrap.sh"
+  hash="$(cut -d: -f2 "$TEMP/bootstrap/auth/.htpasswd")"
+  salt="$(cut -d'$' -f3 <<< "$hash")"
+  [[ "$(printf '%s\n' "$OLD" | openssl passwd -6 -stdin -salt "$salt")" == "$hash" ]]
+done
+for invalid in $'first\nsecond' $'first\rsecond' $'first\n\n' $'\n'; do
+  rm -f "$TEMP/bootstrap/auth/.htpasswd"
+  if DATA_DIR="$TEMP/bootstrap" ADMIN_PASSWORD="$invalid" bash -eu "$TEMP/bootstrap.sh" >/dev/null 2>&1; then
+    echo 'Invalid bootstrap password accepted' >&2; exit 1
+  fi
+  test ! -e "$TEMP/bootstrap/auth/.htpasswd"
+done
+echo 'PASS bootstrap password Secret terminators and embedded newline rejection'

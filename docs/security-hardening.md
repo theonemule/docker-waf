@@ -141,3 +141,30 @@ traffic. A resolvable name in the approved DNS suffix but outside the permitted
 IP scope was rejected without changing the active route. Shared HA tests also
 passed on the updated runtime, including CAS, interrupted-writer recovery,
 signed revision restoration and retention.
+
+## Dependabot review — 2026-11-27
+
+All seven open PRs (#46–52) were reviewed against release source 08bc3dde.
+#46 asks for x/net 0.55.0; the release already contains 0.63.0, so applying
+the stale diff would downgrade security. #47, #49–51 propose Go 1.27.3
+independently across four Dockerfiles. Go 1.26.11 remains the latest patch
+of the supported 1.26 series; upstream also publishes 1.27.4. A toolchain
+migration must update build/versions.env, every builder, and the Go CI
+workflow together. #48 proposes Kubernetes libraries 0.37.2; #52 proposes
+Gateway API 1.7.0 and would pull Kubernetes libraries to 0.37.1. Test these
+together, using the latest compatible patch (0.37.3 as of review), rather
+than merging contradictory module graphs. Keep the existing qualified
+Gateway API v1.4.0 CRDs and conformance target until a deliberate migration.
+
+The exact v3.3.1 CI images and tracked source in run 45945035204 were
+scanned: zero reported vulnerabilities of any severity and zero detected
+secrets. The Go source vulnerability gate also passed. Repository-private
+Dependabot alert API access returned HTTP 401; this review does not assert
+that every private advisory has been cleared. Do not disable Dependabot or
+dismiss security alerts based solely on the public PR list.
+
+The QEMU evidence from that run identified a startup regression: ordinary
+Kubernetes Secret files contain a terminal newline. Bootstrap now removes
+one LF or CRLF terminator while rejecting embedded or repeated line breaks,
+empty passwords, and preserving stdin-only hashing. Source regression
+tests cover this exact contract.

@@ -39,7 +39,15 @@ ADMIN_USER="${ADMIN_USER:-admin}"
 }
 
 if [[ ! -s "$DATA_DIR/auth/.htpasswd" ]]; then
-  [[ -n "${ADMIN_PASSWORD:-}" ]] || {
+  # A Kubernetes Secret created --from-file commonly ends in a single
+  # newline. Accept the conventional file terminator, not embedded lines.
+  ADMIN_PASSWORD="${ADMIN_PASSWORD:-}"
+  if [[ "$ADMIN_PASSWORD" == *$'\r\n' ]];then
+    ADMIN_PASSWORD="${ADMIN_PASSWORD%$'\r\n'}"
+  elif [[ "$ADMIN_PASSWORD" == *$'\n' ]];then
+    ADMIN_PASSWORD="${ADMIN_PASSWORD%$'\n'}"
+  fi
+  [[ -n "$ADMIN_PASSWORD" ]] || {
     echo "ADMIN_PASSWORD is required on first start." >&2
     exit 1
   }
