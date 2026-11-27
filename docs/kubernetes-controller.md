@@ -3,7 +3,7 @@
 The separate Go controller translates Kubernetes resources to the scoped
 LightEdge provider API. The appliance owns and renders all NGINX configuration;
 the controller never mounts configuration directories or writes NGINX files.
-The release pair is appliance v3.3.0 and controller v1.0.0. Until the stable artifacts are published, build compatible images from the same feature branch before using the chart.
+The release pair is appliance v3.3.1 and controller v1.0.1. Until the stable artifacts are published, build compatible images from the same feature branch before using the chart.
 
 ## Quick start
 
@@ -54,7 +54,7 @@ type. The provider Secret must additionally contain `provider.json`. Create
 Secret). The certificate SAN must match the management Service FQDN
 `<release>-lightedge-appliance.<namespace>.svc` for the release name; inspect the rendered chart for the actual Service name. Keep
 `ca.crt` in the provider Secret consistent with that certificate.
-Chart 1.0.0 pins the matching appliance v3.3.0 and controller v1.0.0 registry tags; use explicit local candidate tags until the release is published.
+Chart 1.0.1 pins the matching appliance v3.3.1 and controller v1.0.1 registry tags; use explicit local candidate tags until the release is published.
 
 Use `deploy/kubernetes/examples/` for example Ingress, Gateway/HTTPRoute and
 LightEdgePolicy manifests; adjust host names, services and class names.
@@ -75,18 +75,18 @@ continues using the last successful configuration.
 Back up the appliance state and, if enabled, the shared HA configuration and
 all associated PVCs. Keep the same Helm release name, namespace, provider
 Secret, HMAC Secret, storage claims, listener mappings, and topology. Upgrade
-external appliances with the pinned 3.3.0 upgrader before upgrading their
+external appliances with the pinned 3.3.1 upgrader before upgrading their
 controller. For the embedded mode, Helm replaces the appliance init and main
 containers with the same pinned image.
 
-After v3.3.0 is published, download `lightedge-1.0.0.tgz` and
+After v3.3.1 is published, download `lightedge-1.0.1.tgz` and
 `chart.sha256` from that release and verify the chart. Reapply your saved
 operator values and explicitly select the new image pair:
 
 ```sh
-helm upgrade lightedge ./lightedge-1.0.0.tgz -n lightedge-system \
-  --reuse-values --set image.tag=v1.0.0 \
-  --set appliance.image=ghcr.io/theonemule/docker-waf:v3.3.0 \
+helm upgrade lightedge ./lightedge-1.0.1.tgz -n lightedge-system \
+  --reuse-values --set image.tag=v1.0.1 \
+  --set appliance.image=ghcr.io/theonemule/docker-waf:v3.3.1 \
   --wait --timeout 10m
 ```
 

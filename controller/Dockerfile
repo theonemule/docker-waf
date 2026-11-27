@@ -6,7 +6,7 @@ RUN go mod download
 COPY . .
 RUN go test -count=1 -mod=readonly ./... && go vet -mod=readonly ./... && go build -mod=readonly -trimpath -ldflags="-s -w" -o /lightedge-controller ./cmd/lightedge-controller
 FROM alpine:3.24
-ARG CONTROLLER_VERSION=1.0.0
+ARG CONTROLLER_VERSION=1.0.1
 LABEL org.opencontainers.image.version=$CONTROLLER_VERSION
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 COPY --from=builder /lightedge-controller /usr/local/bin/lightedge-controller

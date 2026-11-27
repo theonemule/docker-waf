@@ -1,7 +1,7 @@
 replicaCount: 1
 image:
   repository: ghcr.io/theonemule/lightedge-controller
-  tag: "v1.0.0"
+  tag: "v1.0.1"
   pullPolicy: IfNotPresent
 provider:
   # Optional existing Secret containing targets.json, per-target token and CA files.
@@ -42,7 +42,7 @@ controller:
   interval: 5s
 appliance:
   enabled: false
-  image: ghcr.io/theonemule/docker-waf:v3.3.0
+  image: ghcr.io/theonemule/docker-waf:v3.3.1
   adminSecret: lightedge-admin
   adminTLSSecret: lightedge-admin-tls
   serviceType: LoadBalancer

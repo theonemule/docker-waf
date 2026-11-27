@@ -2,7 +2,7 @@ apiVersion: v2
 name: lightedge
 description: LightEdge Kubernetes controller and optional appliance
 type: application
-version: 1.0.0
-appVersion: "1.0.0"
+version: 1.0.1
+appVersion: "1.0.1"
 annotations:
-  lightedge.blaize.net/appliance-version: "3.3.0"
+  lightedge.blaize.net/appliance-version: "3.3.1"

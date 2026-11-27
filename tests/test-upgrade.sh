@@ -12,15 +12,15 @@ printf '%s\n' "$*" >> "$MOCK_LOG"
 case "$*" in
   'compose version'|'compose config -q'|'compose up -d --no-deps --pull never liteedge')
     if [[ "$*" == 'compose up -d --no-deps --pull never liteedge' && "${MOCK_FAIL_ACTIVATE:-0}" == 1 ]] &&
-        grep -qx 'LITEEDGE_VERSION=v3.3.0' .env; then echo changed > data/sentinel; touch data/new-state; exit 8; fi
+        grep -qx 'LITEEDGE_VERSION=v3.3.1' .env; then echo changed > data/sentinel; touch data/new-state; exit 8; fi
     ;;
-  'pull ghcr.io/theonemule/docker-waf:v3.3.0')
+  'pull ghcr.io/theonemule/docker-waf:v3.3.1')
     [[ "${MOCK_FAIL_PULL:-0}" != 1 ]] || exit 9 ;;
   'compose ps -aq liteedge'|'compose ps -q liteedge') echo fake-container ;;
   'inspect -f {{.Image}} fake-container')
-    if grep -qx 'LITEEDGE_VERSION=v3.3.0' "$MOCK_DIR/.env"; then echo sha256:new; else echo sha256:old; fi ;;
+    if grep -qx 'LITEEDGE_VERSION=v3.3.1' "$MOCK_DIR/.env"; then echo sha256:new; else echo sha256:old; fi ;;
   'run --rm --entrypoint cat sha256:old /opt/liteedge/VERSION') echo "LiteEdge=${MOCK_OLD_VERSION:-3.1.4}" ;;
-  'image inspect -f {{.Id}} ghcr.io/theonemule/docker-waf:v3.3.0') echo sha256:new ;;
+  'image inspect -f {{.Id}} ghcr.io/theonemule/docker-waf:v3.3.1') echo sha256:new ;;
   'image inspect -f {{.Id}} ghcr.io/theonemule/docker-waf:v3.1.4'|'image inspect -f {{.Id}} ghcr.io/theonemule/docker-waf:latest') echo sha256:old ;;
   'compose stop liteedge') ;;
   'compose run --rm --no-deps -T --pull never --entrypoint tar liteedge -C /data --exclude=./logs --exclude=./run -cf - .') tar -C data --exclude=./logs --exclude=./run -cf - . ;;
@@ -49,7 +49,7 @@ printf 'custom override\n' > "$TMP/current/docker-compose.override.yml"
 cp "$TMP/current/.env" "$TMP/original.env"
 : > "$MOCK_LOG"
 bash "$ROOT/scripts/upgrade-liteedge.sh" --mode docker --compose-dir "$TMP/current"
-grep -qx 'LITEEDGE_VERSION=v3.3.0' "$TMP/current/.env"
+grep -qx 'LITEEDGE_VERSION=v3.3.1' "$TMP/current/.env"
 grep -qx 'ADMIN_PASSWORD=keep-this-private' "$TMP/current/.env"
 grep -qx 'CUSTOM_SETTING=keep-me' "$TMP/current/.env"
 grep -qx 'persistent-data' "$TMP/current/data/sentinel"
@@ -57,7 +57,7 @@ grep -qx 'custom override' "$TMP/current/docker-compose.override.yml"
 if find "$TMP/current" -maxdepth 1 -name '.liteedge-upgrade.*' | grep -q .; then
   echo 'Temporary upgrade directory was not cleaned up' >&2; exit 1
 fi
-grep -qF 'pull ghcr.io/theonemule/docker-waf:v3.3.0' "$MOCK_LOG"
+grep -qF 'pull ghcr.io/theonemule/docker-waf:v3.3.1' "$MOCK_LOG"
 # New container fails to activate: .env must roll back and Compose must restart.
 cp "$TMP/original.env" "$TMP/current/.env"
 : > "$MOCK_LOG"
@@ -102,4 +102,4 @@ rm -f "$TMP/current/.env"
 if bash "$ROOT/scripts/upgrade-liteedge.sh" --mode docker --compose-dir "$TMP/current" >/dev/null 2>&1; then
   echo 'Uninitialized installation was accepted' >&2; exit 1
 fi
-echo 'PASS v3.3.0 upgrade: Docker state retention, rollback on activation/pull/health errors, downgrade/new-install protection'
+echo 'PASS v3.3.1 upgrade: Docker state retention, rollback on activation/pull/health errors, downgrade/new-install protection'

@@ -50,20 +50,20 @@ The management plane is intentionally small:
 - Flat-file persistent configuration
 - No Node.js server, PHP, database, or web application framework; Python 3 is used only for safe backup/archive operations
 
-## Upgrade an existing installation to v3.3.0
+## Upgrade an existing installation to v3.3.1
 
-Release v3.3.0 provides a **single in-place upgrader** for Docker Compose
+Release v3.3.1 provides a **single in-place upgrader** for Docker Compose
 and native Alpine/OpenRC installs. It does not reset credentials, sites,
 certificates, WAF settings, observability configuration, or persistent logs.
-The upgrader is pinned to `v3.3.0`, verifies the Alpine archive's SHA-256,
+The upgrader is pinned to `v3.3.1`, verifies the Alpine archive's SHA-256,
 and backs up configuration before activation and restores it with the prior runtime on failed activation.
 
 After the release has been published, download the script and its checksum from the
-[LiteEdge v3.3.0 release](https://github.com/theonemule/docker-waf/releases/tag/v3.3.0):
+[LiteEdge v3.3.1 release](https://github.com/theonemule/docker-waf/releases/tag/v3.3.1):
 
 ```bash
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.0/upgrade-liteedge.sh
-curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.0/upgrade-liteedge.sh.sha256
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.1/upgrade-liteedge.sh
+curl -fLO https://github.com/theonemule/docker-waf/releases/download/v3.3.1/upgrade-liteedge.sh.sha256
 sha256sum -c upgrade-liteedge.sh.sha256
 chmod +x upgrade-liteedge.sh
 ```
@@ -75,7 +75,7 @@ specify its directory containing `docker-compose.yml`, `.env`, and `data/`:
 ./upgrade-liteedge.sh --mode docker --compose-dir /path/to/liteedge
 ```
 
-The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.3.0`,
+The Docker upgrade pulls `ghcr.io/theonemule/docker-waf:v3.3.1`,
 modifies only `LITEEDGE_VERSION` in the existing `.env`, re-creates
 the service via Compose, and verifies container health. Compose overrides,
 custom environment values, credentials, and authoritative `data/` configuration are preserved. The upgrader verifies the actual installed runtime version, including installations using a local mutable tag. Pin the previous image locally before upgrading if that tag no longer identifies the installed container. If activation fails,

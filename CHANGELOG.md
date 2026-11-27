@@ -1,4 +1,13 @@
-## Unreleased — LiteEdge 3.3.0 and Kubernetes controller 1.0.0
+## LiteEdge 3.3.1 and Kubernetes controller 1.0.1
+
+- Harden management and provider APIs, CSRF, request parsing, rate limits, and credential handling.
+- Enforce scoped provider DNS pinning, verified generated HTTPS upstreams, and explicit trusted client proxy networks.
+- Bound configuration locking and archive extraction; verify CRS releases and pin plugin commits.
+- Add optional namespace-scoped Secret access and security scans, fuzzing and negative regression tests to release gates.
+- Update dependency inputs and signed runtime packages; require fresh disposable integration VMs and verified destruction.
+- See docs/security-hardening.md for migration settings and remaining trust assumptions.
+
+## November 26, 2026 — LiteEdge 3.3.0 and Kubernetes controller 1.0.0
 
 - Independent stable versions for the appliance (3.3.0), controller and chart (1.0.0); all release assets qualify before registry publication.
 - Scoped live management reads, categorized site settings and guided route creation.

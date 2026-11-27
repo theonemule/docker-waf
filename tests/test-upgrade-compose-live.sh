@@ -8,7 +8,7 @@ tmp="$(mktemp -d)"
 suffix="$(openssl rand -hex 5)"
 export COMPOSE_PROJECT_NAME="leup$suffix"
 export FIXTURE_REPO="lightedge-upgrade-$suffix/docker-waf"
-export FIXTURE_IMAGE="ghcr.io/$FIXTURE_REPO:v3.3.0"
+export FIXTURE_IMAGE="ghcr.io/$FIXTURE_REPO:v3.3.1"
 export FIXTURE_PREVIOUS="ghcr.io/$FIXTURE_REPO:v3.1.6"
 export REAL_DOCKER="$(command -v docker)"
 password=upgrade-compose-fixture-only
@@ -71,7 +71,7 @@ compose exec -T liteedge sh -c 'printf "keep\n" >/data/logs/upgrade-fixture.log;
 cp "$tmp/.env" "$tmp/old.env"
 # Exercise successful upgrade and ensure the prior auth remains operational.
 PATH="$tmp/mock:$PATH" bash "$ROOT/scripts/upgrade-liteedge.sh" --mode docker --compose-dir "$tmp"
-grep -qx LITEEDGE_VERSION=v3.3.0 "$tmp/.env"
+grep -qx LITEEDGE_VERSION=v3.3.1 "$tmp/.env"
 grep -qx CUSTOM_SETTING=retained "$tmp/.env"
 ready
 curl -ksSf -u "admin:$password" "$admin/api/v1/site-inventory" | jq -e '.sites|any(.host=="upgrade-compose.test")' >/dev/null
