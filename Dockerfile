@@ -2,7 +2,7 @@ ARG ALPINE_VERSION=3.22
 ARG ALPINE_DIGEST=sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f
 
 ARG ALPINE_REGISTRY=docker.io/library/alpine
-FROM golang:1.26.11-bookworm AS deadline-builder
+FROM golang:1.27.3-bookworm AS deadline-builder
 COPY runtime/deadline/ /src/deadline/
 RUN cd /src/deadline && go test main.go main_test.go && go vet main.go main_test.go && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /deadline-proxy main.go
 
