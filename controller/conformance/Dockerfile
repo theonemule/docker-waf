@@ -1,5 +1,5 @@
 # Build the unmodified official Gateway API test binary, pinned to v1.4.0.
-FROM golang:1.26.11-bookworm AS builder
+FROM golang:1.27.3-bookworm AS builder
 WORKDIR /src
 ENV CGO_ENABLED=0
 RUN go mod download -json sigs.k8s.io/gateway-api@v1.4.0 >/tmp/module.json && \
