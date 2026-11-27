@@ -37,9 +37,17 @@ expect 401 "$(request "$BASE/assets/spa.js")" 'SPA JS requires Basic'
 expect 401 "$(request "$BASE/api/v1/sites")" 'JSON read requires Basic'
 expect 401 "$(request -X POST -H 'X-LiteEdge-API: 1' -d host=x.test "$BASE/api/v1/actions/site/save")" 'JSON write requires Basic'
 expect 200 "$(request -u "admin:$PASS" "$BASE/")" 'SPA root'
+for header in 'Content-Security-Policy:' 'X-Content-Type-Options: nosniff' 'X-Frame-Options:' 'Cache-Control: no-store'; do
+  grep -Fiq "$header" "$HEADERS" || { echo "Missing SPA security header: $header"; exit 1; }
+  COUNT=$((COUNT+1))
+done
 grep -Fq 'src="/assets/spa.js"' "$RESP"
 ! grep -q '<form' "$RESP"
 expect 200 "$(request -u "admin:$PASS" "$BASE/assets/spa.js")" 'SPA JS'
+for header in 'Content-Security-Policy:' 'X-Content-Type-Options: nosniff' 'X-Frame-Options:' 'Cache-Control: no-store'; do
+  grep -Fiq "$header" "$HEADERS" || { echo "Missing SPA security header: $header"; exit 1; }
+  COUNT=$((COUNT+1))
+done
 grep -Fq 'credentials:"same-origin"' "$RESP"
 ! grep -Eq 'location[.]reload[[:space:]]*[(]|location[.]assign[[:space:]]*[(]|window[.]location[.]href[[:space:]]*=' "$RESP"
 for part in sites server alerts owasp catalog 'logs?type=http' owasp/rules; do
@@ -81,6 +89,22 @@ expect 404 "$(request -u "admin:$PASS" "$BASE/api/v1/unknown")" 'Missing resourc
 expect 403 "$(request -u "admin:$PASS" -X POST -d host=test.example "$BASE/api/v1/actions/site/save")" 'CSRF header required'
 expect 403 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H 'Origin: https://evil.example' -d host=test.example "$BASE/api/v1/actions/site/save")" 'Cross-origin blocked'
 expect 403 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H 'Sec-Fetch-Site: cross-site' -d host=test.example "$BASE/api/v1/actions/site/save")" 'Cross-site blocked'
+# Every legacy mutating path must enforce the same browser boundary.
+for legacy in /admin/site/save /admin/import /admin/owasp/import /admin/owasp/crs/import;do
+  expect 403 "$(request -u "admin:$PASS" -X POST -H 'Origin: https://evil.example' -d host=csrf.test "$BASE$legacy")" "Cross-origin legacy $legacy blocked"
+  expect 403 "$(request -u "admin:$PASS" -X POST -d host=csrf.test "$BASE$legacy")" "Legacy $legacy requires positive origin or API header"
+done
+expect 403 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H "Origin: http://127.0.0.1:$PORT" -d host=csrf.test "$BASE/api/v1/actions/site/save")" 'Wrong Origin scheme denied'
+expect 403 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H 'Sec-Fetch-Site: same-site' -d host=csrf.test "$BASE/admin/site/save")" 'Sibling origin legacy denied'
+expect 415 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H 'Content-Type: application/json' -d '{"host":"csrf.test"}' "$BASE/api/v1/actions/site/save")" 'Invalid form media type rejected'
+for malformed in 'host=csrf.test&host=csrf2.test' 'host=csrf.test&%68ost=csrf2.test' 'host=csrf.test%00' 'host=csrf.test%GG' 'host=csrf.test&=bad';do
+  expect 400 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d "$malformed" "$BASE/api/v1/actions/site/save")" 'Malformed or ambiguous form rejected'
+done
+expect 400 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=csrf.test "$BASE/api/v1/actions/site/save?host=csrf2.test")" 'Duplicate between query and body rejected'
+expect 200 "$(request -u "admin:$PASS" "$BASE/api/v1/site-inventory")" 'Rejected mutation left inventory readable'
+json '.sites | all(.host!="csrf.test" and .host!="csrf2.test")'
+expect 303 "$(request -u "admin:$PASS" -X POST -H "Origin: $BASE" -H 'Sec-Fetch-Site: same-origin' -d host=legacy-origin.test "$BASE/admin/site/save")" 'Same-origin legacy form remains functional'
+expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -H "Origin: $BASE" -d host=legacy-origin.test "$BASE/api/v1/actions/site/delete")" 'Same-origin API remains functional'
 expect 200 "$(request -u "admin:$PASS" -X POST -H 'X-LiteEdge-API: 1' -d host=test.example "$BASE/api/v1/actions/site/save")" 'API site create'
 json '.ok==true'
 ! grep -Fiq 'Location:' "$HEADERS"
@@ -147,4 +171,12 @@ expect 303 "$(request -u "admin:$PASS" "$BASE/admin/")" 'Legacy bookmark returns
 grep -Fiq 'Location: /#/sites' "$HEADERS"
 expect 303 "$(request -u "admin:$PASS" "$BASE/admin/server")" 'Old Server Settings bookmark redirects to SPA'
 grep -Fiq 'Location: /#/server' "$HEADERS"
+# Static resources must not provide an unthrottled password guessing endpoint.
+throttled=0
+for i in $(seq 1 65); do
+  code="$(request -u 'admin:invalid-test-password' "$BASE/assets/spa.js")"
+  if [[ "$code" == 429 ]]; then throttled=1; break; fi
+  [[ "$code" == 401 ]] || { echo "Unexpected auth response: $code"; exit 1; }
+done
+expect 1 "$throttled" 'Static Basic auth is rate limited'
 echo "PASS SPA API: $COUNT assertions; Basic auth, JSON, CSRF, no HTML redirect, pool model, private secrets, legacy compatibility"

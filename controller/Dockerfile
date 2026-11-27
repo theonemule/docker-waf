@@ -8,7 +8,7 @@ RUN go test -count=1 -mod=readonly ./... && go vet -mod=readonly ./... && go bui
 FROM alpine:3.24
 ARG CONTROLLER_VERSION=1.0.0
 LABEL org.opencontainers.image.version=$CONTROLLER_VERSION
-RUN apk add --no-cache ca-certificates
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates
 COPY --from=builder /lightedge-controller /usr/local/bin/lightedge-controller
 USER 65532:65532
 EXPOSE 8081

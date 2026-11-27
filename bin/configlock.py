@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 """Hold the appliance writer lock across a shell/Python command and its children."""
-import fcntl
 import os
 from pathlib import Path
 import subprocess
@@ -70,10 +69,13 @@ if __name__ == "__main__":
     data.mkdir(parents=True, exist_ok=True)
     if os.environ.get("LITEEDGE_HA_DIR"):
         sys.exit(shared_run(data,sys.argv[1:]))
-    with (data / ".liteedge-config.lock").open("a") as fd:
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        if (data / ".liteedge-provider-transaction").exists():
-            print("Provider transaction recovery required before configuration writes.", file=sys.stderr)
-            sys.exit(1)
-        env = dict(os.environ, LITEEDGE_CONFIG_LOCK_HELD="1")
-        sys.exit(subprocess.call(sys.argv[1:], env=env, pass_fds=(fd.fileno(),)))
+    from ha_config import file_lock, HAError
+    try:
+        with file_lock(data / ".liteedge-config.lock") as fd:
+            if (data / ".liteedge-provider-transaction").exists():
+                sys.exit(failure("Provider transaction recovery required before configuration writes.",
+                                 Path(sys.argv[1]).name=="admin.sh"))
+            env = dict(os.environ, LITEEDGE_CONFIG_LOCK_HELD="1")
+            sys.exit(subprocess.call(sys.argv[1:], env=env, pass_fds=(fd,)))
+    except (HAError, OSError):
+        sys.exit(failure("Configuration writer lock unavailable",Path(sys.argv[1]).name=="admin.sh"))

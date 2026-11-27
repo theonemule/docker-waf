@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+from archive_guard import bounded_tar, ArchiveError
 
 FORMAT = 'liteedge-full-backup-v1'
 MAX_COMPRESSED = 256 * 1024 * 1024
@@ -102,7 +103,10 @@ def create(data, output):
                  'mode': stat.S_IMODE(meta.st_mode)}
         if kind == 'file':
             with open(path, 'rb') as source:
-                digest = hashlib.file_digest(source, 'sha256').hexdigest()
+                hasher = hashlib.sha256()
+                for chunk in iter(lambda: source.read(1024 * 1024), b''):
+                    hasher.update(chunk)
+                digest = hasher.hexdigest()
             entry['sha256'] = digest
             entry['size'] = meta.st_size
         elif kind == 'link':
@@ -137,24 +141,31 @@ def stage_archive(source, stage):
         raise InvalidBackup('Backup exceeds the 256 MiB upload limit')
     root = stage / 'data'
     root.mkdir(parents=True, mode=0o700)
-    with tarfile.open(source, 'r:gz') as tar:
-        members = tar.getmembers()
-        if len(members) > MAX_ENTRIES + 1 or not members or members[0].name != 'manifest.json':
+    with bounded_tar(source, MAX_EXPANDED + 64 * 1024 * 1024) as tar:
+        first = tar.next()
+        if first is None or first.name != 'manifest.json' or not first.isfile():
             raise InvalidBackup('Not a LiteEdge full backup archive')
-        meta = tar.extractfile(members[0])
-        if meta is None or members[0].size > 8 * 1024 * 1024:
+        if first.size > 8 * 1024 * 1024:
+            raise InvalidBackup('Invalid or oversized backup manifest')
+        meta = tar.extractfile(first)
+        if meta is None:
             raise InvalidBackup('Invalid or oversized backup manifest')
         manifest = json.loads(meta.read())
-        if manifest.get('format') != FORMAT or manifest.get('excludes_logs') is not True:
+        if not isinstance(manifest, dict) or manifest.get('format') != FORMAT or manifest.get('excludes_logs') is not True:
             raise InvalidBackup('Unsupported backup format')
         expected = manifest.get('entries')
-        if not isinstance(expected, list) or len(expected) != len(members) - 1:
+        if not isinstance(expected, list) or len(expected) > MAX_ENTRIES:
             raise InvalidBackup('Backup manifest does not match archive')
         seen = set()
         total = 0
-        links = []
+        links = {}
         directories = []
-        for member, record in zip(members[1:], expected):
+        for record in expected:
+            member = tar.next()
+            if member is None or not isinstance(record, dict):
+                raise InvalidBackup('Archive and manifest entries do not match')
+            if member.issparse() or any(k.startswith("GNU.sparse") for k in member.pax_headers):
+                raise InvalidBackup('Sparse archive entries are unsupported')
             parts = safe_path(member.name)
             if len(parts) < 2 or parts[0] != 'data' or excluded(parts[1:]):
                 raise InvalidBackup('Archive contains excluded or unexpected paths')
@@ -176,7 +187,7 @@ def stage_archive(source, stage):
                 if record.get('type') != 'link' or member.linkname != record.get('target'):
                     raise InvalidBackup('Symlink metadata mismatch')
                 valid_link(rel, member.linkname)
-                links.append(rel)
+                links[rel] = record
             elif member.isfile():
                 if record.get('type') != 'file' or member.size != record.get('size'):
                     raise InvalidBackup('File metadata mismatch')
@@ -197,8 +208,9 @@ def stage_archive(source, stage):
                 os.chmod(dest, int(record.get('mode', 0o600)) & 0o777)
             else:
                 raise InvalidBackup('Archive contains unsupported device or link type')
-        for rel in links:
-            record = next(item for item in expected if item['path'] == '/'.join(rel))
+        if tar.next() is not None:
+            raise InvalidBackup('Archive contains entries absent from manifest')
+        for rel, record in links.items():
             dest = root.joinpath(*rel)
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.symlink_to(record['target'])
@@ -206,14 +218,14 @@ def stage_archive(source, stage):
         for rel in links:
             dest = root.joinpath(*rel)
             resolved = Path(os.path.realpath(dest))
-            if not resolved.is_relative_to(root.resolve()):
-                raise InvalidBackup('Archive contains an escaping symlink chain')
+            if not resolved.is_relative_to(root.resolve()) or excluded(resolved.relative_to(root.resolve()).parts):
+                raise InvalidBackup('Archive contains an escaping or excluded symlink chain')
         for path, mode in reversed(directories):
             path.chmod(int(mode) & 0o777)
     for required in ('sites', 'certs', 'nginx', 'auth'):
-        if not (root / required).is_dir():
+        if not (root / required).is_dir() or (root / required).is_symlink():
             raise InvalidBackup('Backup missing required directory: ' + required)
-    if not (root / 'auth/.htpasswd').is_file():
+    if not (root / 'auth/.htpasswd').is_file() or (root / 'auth/.htpasswd').is_symlink():
         raise InvalidBackup('Backup missing administrator credentials')
     (root / 'auth/.htpasswd').chmod(0o600)
     for key in (root / 'certs').rglob('privkey.pem'):
@@ -294,6 +306,6 @@ if __name__ == '__main__':
 
     try:
         main()
-    except (InvalidBackup, OSError, tarfile.TarError, subprocess.CalledProcessError, ValueError) as error:
+    except (InvalidBackup, ArchiveError, OSError, EOFError, tarfile.TarError, subprocess.CalledProcessError, ValueError, TypeError) as error:
         print(str(error), file=sys.stderr)
         sys.exit(1)

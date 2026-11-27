@@ -7,6 +7,7 @@ TMP="$(mktemp -d)"
 cleanup() { docker rm -f "$NAME" >/dev/null 2>&1 || true; rm -rf "$TMP"; }
 trap cleanup EXIT
 docker run -d --name "$NAME" -e ADMIN_USER=admin -e ADMIN_PASSWORD=route-test \
+  -e LITEEDGE_TRUSTED_PROXY_CIDRS=127.0.0.1/32 \
   -e LITEEDGE_RESTART_POLICY=no -p 127.0.0.1::9443 -p 127.0.0.1::8080 "$IMAGE" >/dev/null
 ADMINPORT="$(docker port "$NAME" 9443/tcp | awk -F: 'END{print $NF}')"
 PROXYPORT="$(docker port "$NAME" 8080/tcp | awk -F: 'END{print $NF}')"
@@ -54,6 +55,15 @@ jq -e '.site.routes[0] | .methods=="GET,POST" and .rewrite_enabled=="1" and .rew
 ID="$(jq -r '.site.routes[0].id' "$TMP/site")"
 curl --noproxy '*' -sS -H 'Host: routes.test' "$PROXY/legacy/item?foo=bar" >"$TMP/result"
 jq -e '.path=="/v2/item?foo=bar" and .headers["X-App-Route"]=="feature-test" and .headers["X-Project-ID"]=="alpha"' "$TMP/result" >/dev/null
+curl --noproxy '*' -sS -H 'Host: routes.test' -H 'X-Forwarded-For: 192.0.2.44' \
+  -H 'X-Real-IP: 192.0.2.44' -H 'X-Forwarded-Host: forged.test' \
+  -H 'X-Forwarded-Port: 9999' -H 'X-Forwarded-Proto: https' -H 'Forwarded: for=192.0.2.44' "$PROXY/legacy/item" >"$TMP/result"
+jq -e '.headers["X-Forwarded-For"]==.headers["X-Real-IP"] and .headers["X-Real-IP"]!="192.0.2.44" and .headers["X-Forwarded-Host"]=="routes.test" and .headers["X-Forwarded-Port"]=="80" and .headers["X-Forwarded-Proto"]=="http" and (.headers|has("Forwarded")|not)' "$TMP/result" >/dev/null
+# A configured proxy is trusted only from its declared address. Recursion
+# selects the last non-trusted hop, not the leftmost user-supplied address.
+docker exec "$NAME" curl --noproxy '*' -sS -H 'Host: routes.test' \
+  -H 'X-Forwarded-For: 192.0.2.44, 198.51.100.8' http://127.0.0.1:8080/legacy/item >"$TMP/result"
+jq -e '.headers["X-Forwarded-For"]=="198.51.100.8" and .headers["X-Real-IP"]=="198.51.100.8"' "$TMP/result" >/dev/null
 check 405 "$(curl --noproxy '*' -sS -X DELETE -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/legacy/item")" 'DELETE blocked'
 check 405 "$(curl --noproxy '*' -sS -I -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/legacy/item")" 'HEAD blocked'
 check 200 "$(curl --noproxy '*' -sS -X POST -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/legacy/item")" 'POST allowed'
@@ -74,6 +84,7 @@ check 400 "$(api --data-urlencode host=routes.test --data-urlencode path=/badbod
 check 200 "$(api --data-urlencode host=routes.test --data-urlencode path=/blocked/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode waf=0 --data-urlencode force_https=0 --data-urlencode 'allow_ips=192.0.2.44/32,2001:db8::/32')" 'allowed CIDRs saved'
 sleep 1 # Allow reloaded NGINX workers to take over the new locations.
 check 403 "$(curl --noproxy '*' -sS -H 'Host: routes.test' -o /dev/null -w '%{http_code}' "$PROXY/blocked/test")" 'unlisted source blocked'
+check 403 "$(curl --noproxy '*' -sS -H 'Host: routes.test' -H 'X-Forwarded-For: 192.0.2.44' -o /dev/null -w '%{http_code}' "$PROXY/blocked/test")" 'forged allowlisted IP blocked'
 check 200 "$(api --data-urlencode host=routes.test --data-urlencode path=/rate/ --data-urlencode target=http://127.0.0.1:12001 --data-urlencode waf=0 --data-urlencode force_https=0 --data-urlencode rate_count=1 --data-urlencode rate_unit=s)" 'rate guard saved'
 sleep 1
 curl --noproxy '*' -sS -H 'Host: routes.test' -o /dev/null "$PROXY/rate/first" || true

@@ -27,22 +27,23 @@ current_version() {
 }
 
 write_update_status() {
-  local checked="$1" latest="$2" tag="$3" url="$4"
+  local checked="$1" latest="$2" tag="$3" url="$4" digest="$5"
   cat > "$WAF_CRS_UPDATE_FILE.tmp" <<EOF
 CHECKED_AT=$checked
 LATEST_VERSION=$latest
 TAG=$tag
 DOWNLOAD_URL=$url
+DOWNLOAD_SHA256=$digest
 EOF
   chmod 0600 "$WAF_CRS_UPDATE_FILE.tmp"
   mv "$WAF_CRS_UPDATE_FILE.tmp" "$WAF_CRS_UPDATE_FILE"
 }
 
 check_update() {
-  local raw latest tag url checked
+  local raw latest tag url checked digest asset
   raw="$(mktemp)"
   trap 'rm -f "${raw:-}"' RETURN
-  curl -fsSL --connect-timeout 5 --max-time 15 --proto '=https' --tlsv1.2 \
+  curl -fsSL --max-filesize 2097152 --connect-timeout 5 --max-time 15 --proto '=https' --tlsv1.2 \
     -H 'Accept: application/vnd.github+json' \
     -H 'User-Agent: LiteEdge' \
     "$RELEASE_API_URL" -o "$raw"
@@ -54,9 +55,14 @@ check_update() {
   validate_version "$latest"
   [[ "$(jq -r '.draft // false' "$raw")" == false ]] || die "Latest CRS release is marked as a draft."
   [[ "$(jq -r '.prerelease // false' "$raw")" == false ]] || die "Latest CRS release is a prerelease."
-  url="https://github.com/coreruleset/coreruleset/archive/refs/tags/${tag}.tar.gz"
+  # Use the release's named immutable artifact, not the mutable tag archive.
+  asset="coreruleset-${latest}-minimal.tar.gz"
+  url="https://github.com/coreruleset/coreruleset/releases/download/$tag/$asset"
+  digest="$(jq -er --arg name "$asset" --arg url "$url" '[.assets[] | select(.name==$name and .browser_download_url==$url)] | if length==1 then .[0].digest else error("missing release artifact") end' "$raw")" ||
+    die "CRS release is missing a verifiable archive."
+  [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || die "CRS release does not publish a SHA-256 digest."
   checked="$(date +%s)"
-  write_update_status "$checked" "$latest" "$tag" "$url"
+  write_update_status "$checked" "$latest" "$tag" "$url" "${digest#sha256:}"
   printf '%s\n' "$latest"
   trap - RETURN
   rm -f "$raw"
@@ -93,19 +99,7 @@ status() {
   printf 'UPDATE_AVAILABLE=%s\n' "$update"
 }
 
-safe_archive() {
-  local archive="$1" name line type
-  [[ -s "$archive" ]] || die "CRS archive is empty."
-  tar -tzf "$archive" >/dev/null 2>&1 || die "CRS archive is not a valid .tar.gz file."
-  while IFS= read -r name; do
-    [[ "$name" != /* && "$name" != ../* && "$name" != *"/../"* && "$name" != *"/.." ]] ||
-      die "CRS archive contains an unsafe path."
-  done < <(tar -tzf "$archive")
-  while IFS= read -r line; do
-    type="${line:0:1}"
-    case "$type" in -|d) ;; *) die "CRS archive contains an unsupported filesystem object." ;; esac
-  done < <(tar -tvzf "$archive")
-}
+
 
 detect_root() {
   local dir="$1" candidate
@@ -170,10 +164,7 @@ apply_staged_crs() {
   rm -rf "$WAF_CRS_DIR"
   mv "$stage" "$WAF_CRS_DIR"
   stage=""
-  cat > "$WAF_CRS_META_FILE" <<EOF
-VERSION=$version
-SOURCE=managed
-EOF
+  cp "$WAF_CRS_DIR/.liteedge-crs" "$WAF_CRS_META_FILE"
   chmod 0600 "$WAF_CRS_META_FILE"
 
   if ! /opt/liteedge/bin/render-runtime.sh ||
@@ -203,13 +194,12 @@ EOF
   return 0
 }
 
-import_archive() {
-  local archive="$1" expected="${2:-}" tmp root version stage
+import_archive() (
+  local archive="$1" expected="${2:-}" digest="${3:-}" tmp root version stage=""
   [[ -f "$archive" ]] || die "CRS archive is required."
-  safe_archive "$archive"
   tmp="$(mktemp -d)"
-  trap 'rm -rf "${tmp:-}"' EXIT
-  tar -xzf "$archive" -C "$tmp"
+  trap 'rm -rf "${tmp:-}" "${stage:-}"' EXIT
+  python3 /opt/liteedge/bin/archive_guard.py "$archive" "$tmp"  || die "Archive validation failed."
   root="$(detect_root "$tmp")" || die "CRS archive does not contain a recognizable OWASP CRS source tree."
   version="$(detect_archive_version "$root")"
   if [[ -n "$expected" ]]; then
@@ -218,23 +208,27 @@ import_archive() {
   fi
   stage="$(mktemp -d "$WAF_DIR/.crs-stage.XXXXXX")"
   stage_crs "$root" "$version" "$stage"
+  if [[ -n "$digest" ]];then printf 'ARCHIVE_SHA256=%s\nPROVENANCE=github-release-digest\n' "$digest" >> "$stage/.liteedge-crs";fi
   apply_staged_crs "$stage" "$version"
   rm -rf "$tmp"
   trap - EXIT
   printf '%s\n' "$version"
-}
+)
 
 install_latest() {
-  local latest url tmp
+  local latest url tmp digest
   latest="$(check_update)"
+  validate_version "$latest"
   url="$(kv_get "$WAF_CRS_UPDATE_FILE" DOWNLOAD_URL)"
-  [[ "$url" == https://github.com/coreruleset/coreruleset/archive/refs/tags/v*.tar.gz ]] ||
-    die "Invalid CRS download URL."
+  digest="$(kv_get "$WAF_CRS_UPDATE_FILE" DOWNLOAD_SHA256)"
+  [[ "$url" == "https://github.com/coreruleset/coreruleset/releases/download/v$latest/coreruleset-$latest-minimal.tar.gz" && "$digest" =~ ^[0-9a-f]{64}$ ]] ||
+    die "Invalid CRS release provenance."
   tmp="$(mktemp)"
   trap 'rm -f "${tmp:-}"' EXIT
-  curl -fL --retry 2 --connect-timeout 10 --max-time 120 --proto '=https' --tlsv1.2 \
+  curl -fL --retry 2 --max-filesize 33554432 --connect-timeout 10 --max-time 120 --proto '=https' --tlsv1.2 \
     -o "$tmp" "$url"
-  import_archive "$tmp" "$latest" >/dev/null
+  printf '%s  %s\n' "$digest" "$tmp" | sha256sum -c - >/dev/null || die "CRS release checksum mismatch."
+  import_archive "$tmp" "$latest" "$digest" >/dev/null
   trap - EXIT
   rm -f "$tmp"
   printf '%s\n' "$latest"

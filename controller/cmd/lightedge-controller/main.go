@@ -339,7 +339,7 @@ func run() error {
 		}
 		fmt.Fprintf(w, "lightedge_reconciliations_total %d\nlightedge_reconciliation_failures_total %d\n", total.Load(), failed.Load())
 	})
-	server := &http.Server{Addr: health, Handler: mux, ReadHeaderTimeout: 3 * time.Second}
+	server := &http.Server{Addr: health, Handler: mux, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second, WriteTimeout: 5 * time.Second, IdleTimeout: 15 * time.Second, MaxHeaderBytes: 16 << 10}
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Printf("health server: %v", err)

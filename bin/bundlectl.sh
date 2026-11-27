@@ -87,26 +87,7 @@ export_one_site() {
   fi
 }
 
-safe_archive() {
-  local archive="$1" line type name
-  [[ -s "$archive" ]] || die "Bundle is empty."
-  tar -tzf "$archive" >/dev/null 2>&1 || die "Bundle is not a valid gzip-compressed tar archive."
 
-  while IFS= read -r name; do
-    [[ "$name" == liteedge-bundle || "$name" == liteedge-bundle/* ]] ||
-      die "Bundle contains an unexpected path: $name"
-    [[ "$name" != /* && "$name" != *"/../"* && "$name" != ../* && "$name" != *"/.." ]] ||
-      die "Bundle contains an unsafe path: $name"
-  done < <(tar -tzf "$archive")
-
-  while IFS= read -r line; do
-    type="${line:0:1}"
-    case "$type" in
-      -|d) ;;
-      *) die "Bundle contains an unsupported filesystem object." ;;
-    esac
-  done < <(tar -tvzf "$archive")
-}
 
 materialize_portable_root() {
   local file="$1" root relative
@@ -263,12 +244,11 @@ import_bundle() {
 
   [[ -f "$archive" ]] || die "Bundle file is required."
   import_certs="$(bool_value "$import_certs")"
-  safe_archive "$archive"
 
   tmp="$(mktemp -d)"
   backup="$(mktemp -d)"
   trap 'rm -rf "$tmp" "$backup"' EXIT
-  tar -xzf "$archive" -C "$tmp"
+  python3 /opt/liteedge/bin/archive_guard.py "$archive" "$tmp" --prefix liteedge-bundle --limit-mib 256 || die "Archive validation failed."
   root="$tmp/liteedge-bundle"
   manifest="$root/manifest"
   [[ -f "$manifest" ]] || die "Bundle manifest is missing."

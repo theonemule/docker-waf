@@ -48,7 +48,7 @@ get() {
 }
 post() {
   local path="$1"; shift
-  curl --noproxy '*' -ks --connect-timeout 3 --max-time 20 -u "admin:$PASS"     -X POST -D "$TEMP/post-headers" -o "$RESP" -w '%{http_code}' "$URL$path" "$@"
+  curl --noproxy '*' -ks --connect-timeout 3 --max-time 20 -u "admin:$PASS"     -X POST -H 'X-LiteEdge-API: 1' -D "$TEMP/post-headers" -o "$RESP" -w '%{http_code}' "$URL$path" "$@"
 }
 assert_code() {
   local wanted="$1" actual="$2" label="$3"

@@ -2,7 +2,7 @@ name: Three-pass clean build repeatability
 
 on:
   push:
-    branches: [feature/dependency-ci-hardening]
+    branches: [feature/dependency-ci-hardening, feature/security-hardening]
   workflow_dispatch:
 
 # Called workflow has gated publication jobs. GitHub requires the caller to

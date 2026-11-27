@@ -2,6 +2,53 @@
 set -uo pipefail
 
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+# Reject untrusted browser mutations before taking the configuration writer
+# lock. Legacy form endpoints are not an alternate CSRF bypass.
+request_reject() {
+  printf 'Status: %s\r\nContent-Type: application/json; charset=utf-8\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n{"ok":false,"error":"%s"}\n' "$1" "$2"
+  exit 0
+}
+mutation_guard() {
+  local scheme=http origin="${HTTP_ORIGIN:-}"
+  [[ "${HTTPS:-}" != on ]] || scheme=https
+  case "${HTTP_SEC_FETCH_SITE:-}" in
+    same-origin|none|'') ;;
+    *) request_reject 403 'Cross-site mutation denied.' ;;
+  esac
+  if [[ -n "$origin" ]];then
+    [[ -n "${HTTP_HOST:-}" && "$origin" == "$scheme://$HTTP_HOST" ]] ||
+      request_reject 403 'Cross-origin mutation denied.'
+  fi
+  if [[ "${HTTP_X_LITEEDGE_API:-}" != 1 ]];then
+    # Native legacy forms cannot add custom headers. Require positive
+    # same-origin evidence instead; non-browser clients use the API header.
+    [[ "$1" == legacy && -n "$origin" ]] ||
+      request_reject 403 'Mutation requires X-LiteEdge-API: 1.'
+  fi
+}
+if [[ "${REQUEST_METHOD:-GET}" == POST ]];then
+  case "${PATH_INFO:-/}" in
+    /api/v1/actions/*|/api/v1/import|/api/v1/owasp/import|/api/v1/owasp/crs/import|/api/v1/backup/restore)
+      mutation_guard api ;;
+    /admin/*) mutation_guard legacy ;;
+  esac
+  case "${PATH_INFO:-/}" in
+    /api/v1/actions/*|/admin/*)
+      case "${PATH_INFO:-/}" in
+        /admin/import|/admin/owasp/import|/admin/owasp/crs/import) ;;
+        *)
+          length="${CONTENT_LENGTH:-0}"
+          [[ "$length" =~ ^(0|[1-9][0-9]{0,7})$ ]] || request_reject 400 'Invalid Content-Length.'
+          (( length <= 4194304 )) || request_reject 413 'Form body exceeds 4 MiB.'
+          if (( length > 0 ));then
+            local_type="${CONTENT_TYPE:-}"; [[ "${local_type%%;*}" == application/x-www-form-urlencoded ]] ||
+              request_reject 415 'URL-encoded form required.'
+          fi
+          ;;
+      esac
+      ;;
+  esac
+fi
 if [[ "${REQUEST_METHOD:-GET}" != GET && "${LITEEDGE_CONFIG_LOCK_HELD:-0}" != 1 ]]; then
   exec python3 /opt/liteedge/bin/configlock.py "$0" "$@"
 fi
@@ -10,41 +57,31 @@ source /opt/liteedge/bin/common.sh
 
 declare -A PARAM
 
-url_decode() {
-  local data="${1//+/ }" out="" prefix rest hex decoded
-  while [[ "$data" == *%* ]]; do
-    prefix="${data%%\%*}"
-    rest="${data#*%}"
-    out+="$prefix"
-    if (( ${#rest} >= 2 )); then
-      hex="${rest:0:2}"
-      if [[ "$hex" =~ ^[0-9A-Fa-f]{2}$ && "$hex" != 00 ]]; then
-        printf -v decoded '%b' "\\x$hex"
-        out+="$decoded"
-        data="${rest:2}"
-        continue
-      fi
-    fi
-    out+='%'
-    data="$rest"
+# Decode once, in bounded linear-time Python. The NUL delimiter preserves
+# whitespace and trailing line breaks without eval or shell expansion.
+parse_params() {
+  local raw="$1" key i count
+  local -a fields=()
+  [[ -n "$raw" ]] || return 0
+  mapfile -d '' -t fields < <(printf '%s' "$raw" | python3 /opt/liteedge/bin/admin_params.py)
+  count="${#fields[@]}"
+  (( count > 0 && count % 2 == 1 )) || request_reject 400 'Invalid form encoding.'
+  [[ "${fields[count-1]}" == OK ]] || request_reject 400 'Invalid form encoding.'
+  for ((i=0;i<count-1;i+=2));do
+    key="${fields[i]}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_-]{0,63}$ ]] || request_reject 400 'Invalid parameter name.'
+    [[ ! -v 'PARAM[$key]' ]] || request_reject 400 'Duplicate parameter.'
+    PARAM["$key"]="${fields[i+1]}"
   done
-  printf '%s%s' "$out" "$data"
 }
 
-parse_params() {
-  local raw="$1" pair key value
-  local IFS='&'
-  for pair in $raw; do
-    key="${pair%%=*}"
-    if [[ "$pair" == *=* ]]; then
-      value="${pair#*=}"
-    else
-      value=""
-    fi
-    key="$(url_decode "$key")"
-    value="$(url_decode "$value")"
-    PARAM["$key"]="$value"
-  done
+read_form() {
+  local length="${CONTENT_LENGTH:-0}" body="" LC_ALL=C
+  if (( length > 0 ));then
+    IFS= read -r -N "$length" body || request_reject 400 'Incomplete or invalid form body.'
+    [[ "${#body}" == "$length" ]] || request_reject 400 'Incomplete or invalid form body.'
+    parse_params "$body"
+  fi
 }
 
 html_escape() {
@@ -139,6 +176,8 @@ HTML
 
 redirect() {
   local location="$1"
+  [[ "$location" == /* && "$location" != //* && "$location" != *$'\r'* && "$location" != *$'\n'* ]] ||
+    request_reject 400 'Invalid redirect.'
   printf 'Status: 303 See Other\r\n'
   printf 'Location: %s\r\n' "$location"
   printf 'Cache-Control: no-store\r\n\r\n'
@@ -1352,7 +1391,7 @@ logs_export() {
   else
     printf 'Content-Type: text/csv; charset=utf-8\r\nContent-Disposition: attachment; filename="liteedge-logs.csv"\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
     printf 'timestamp,type,host,route,port,method,status,ip,uri,rule_id,message,action,request_id\r\n'
-    printf '%s\n' "$query_output" | jq -r '[.timestamp,.type,.host,.route,.port,.method,.status,.ip,.uri,.rule_id,.message,.action,.request_id] | map((. // "" | tostring) | if test("^[=+@-]") then "\u0027"+. else . end) | @csv'
+    printf '%s\n' "$query_output" | jq -r '[.timestamp,.type,.host,.route,.port,.method,.status,.ip,.uri,.rule_id,.message,.action,.request_id] | map((. // "" | tostring) | if test("^[[:space:][:cntrl:]]*[=+@-]|^[\\t\\r\\n]") then "\u0027"+. else . end) | @csv'
   fi
   exit 0
 }
@@ -1690,10 +1729,7 @@ path="${PATH_INFO:-/}"
 parse_params "${QUERY_STRING:-}"
 if [[ "$path" == /api/v1/* ]]; then
   if [[ "${REQUEST_METHOD:-GET}" == POST && "$path" == /api/v1/actions/* ]]; then
-    length="${CONTENT_LENGTH:-0}"
-    if [[ "$length" =~ ^[0-9]+$ ]] && (( length > 0 )); then
-      body=""; IFS= read -r -N "$length" body || true; parse_params "$body"
-    fi
+    read_form
   fi
   # shellcheck disable=SC1091
   source /opt/liteedge/cgi/api.sh
@@ -1722,6 +1758,7 @@ if [[ "${REQUEST_METHOD:-GET}" == GET && "${LITEEDGE_ALLOW_LEGACY_UI:-0}" != 1 ]
 fi
 
 if [[ "$path" == /admin/export ]]; then
+  [[ "${REQUEST_METHOD:-GET}" == GET ]] || request_reject 405 'GET required.'
   handle_export
 fi
 if [[ "$path" == /admin/import ]]; then
@@ -1729,6 +1766,7 @@ if [[ "$path" == /admin/import ]]; then
 fi
 
 if [[ "$path" == /admin/owasp/export ]]; then
+  [[ "${REQUEST_METHOD:-GET}" == GET ]] || request_reject 405 'GET required.'
   handle_owasp_export
 fi
 if [[ "$path" == /admin/owasp/import ]]; then
@@ -1738,13 +1776,8 @@ if [[ "$path" == /admin/owasp/crs/import ]]; then
   handle_crs_raw_import
 fi
 
-if [[ "${REQUEST_METHOD:-GET}" == POST ]]; then
-  length="${CONTENT_LENGTH:-0}"
-  if [[ "$length" =~ ^[0-9]+$ ]] && (( length > 0 )); then
-    body=""
-    IFS= read -r -N "$length" body || true
-    parse_params "$body"
-  fi
+if [[ "${REQUEST_METHOD:-GET}" == POST && "$path" == /admin/* ]]; then
+  read_form
 fi
 
 case "$path" in
@@ -1753,7 +1786,7 @@ case "$path" in
   /admin/owasp) owasp_page ;;
   /admin/server) server_page ;;
   /admin/logs) logs_page ;;
-  /admin/logs/export) logs_export ;;
+  /admin/logs/export) [[ "${REQUEST_METHOD:-GET}" == GET ]] || request_reject 405 'GET required.'; logs_export ;;
   /admin/alerts) alerts_page ;;
   /admin/collector) redirect "/admin/server#log-export" ;;
   /admin/site/save|/admin/site/delete|/admin/site/enable|/admin/site/disable|/admin/route/add|/admin/route/save|/admin/route/delete|/admin/cert/selfsigned|/admin/cert/email/save|/admin/cert/letsencrypt|/admin/cert/import|/admin/waf/disable|/admin/waf/enable|/admin/owasp/pl|/admin/owasp/crs/check|/admin/owasp/crs/update|/admin/owasp/crs/reset|/admin/owasp/catalog/refresh|/admin/owasp/plugin/install|/admin/owasp/plugin/remove|/admin/owasp/plugin/config-save|/admin/owasp/rule/disable|/admin/owasp/rule/enable|/admin/owasp/custom/save|/admin/owasp/custom/disable|/admin/owasp/custom/enable|/admin/owasp/custom/delete|/admin/password/change|/admin/server/save|/admin/server/smtp/save|/admin/alerts/save|/admin/alerts/delete|/admin/collector/save|/admin/config/save|/admin/config/reset)

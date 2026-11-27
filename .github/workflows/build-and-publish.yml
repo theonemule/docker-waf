@@ -2,7 +2,7 @@ name: Build and qualify LightEdge and Kubernetes controller
 
 on:
   push:
-    branches: [master, "feature/**", "!feature/dependency-ci-hardening"]
+    branches: [master, "feature/**", "!feature/dependency-ci-hardening", "!feature/security-hardening"]
     tags:
       - "v3.*"
   workflow_dispatch:
@@ -79,6 +79,25 @@ jobs:
           shellcheck -x install.sh entrypoint.sh bin/*.sh cgi/*.sh scripts/*.sh
           ADMIN_PASSWORD=test docker compose config >/dev/null
 
+      - name: Go vulnerability and fuzz checks
+        if: steps.schedule.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          source build/versions.env
+          docker run --rm -v "$GITHUB_WORKSPACE:/source:ro" "golang:$GO_VERSION-bookworm" bash -ec '
+            export GOTOOLCHAIN=local
+            cp -a /source/controller /tmp/controller
+            cp -a /source/runtime/deadline /tmp/deadline
+            cd /tmp/controller
+            go mod verify
+            go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
+            /go/bin/govulncheck ./...
+            go test ./...
+            cd /tmp/deadline
+            GO111MODULE=off go test -parallel 2 -fuzz FuzzDecode -fuzztime 5s main.go main_test.go
+          '
+
       - name: Test installer and import contracts
         if: steps.schedule.outputs.enabled == 'true'
         shell: bash
@@ -108,6 +127,7 @@ jobs:
           python3 tests/test-site-read.py
           python3 tests/test-http-api-coverage.py
           python3 tests/test-provider.py
+          python3 tests/test-security-inputs.py
           python3 tests/test-ha-config.py
           python3 tests/test-nginx-generation.py
           python3 tests/test-ci-pipeline.py
@@ -246,7 +266,7 @@ jobs:
   build-container:
     needs: build-appliance
     runs-on: [self-hosted, Linux, X64, ci163-waf]
-    timeout-minutes: 30
+    timeout-minutes: 50
     permissions:
       contents: read
 
@@ -274,6 +294,19 @@ jobs:
           set -euo pipefail
           docker build --no-cache --pull --build-arg CONTROLLER_VERSION="${{ needs.build-appliance.outputs.controller_version }}" -t lightedge-controller:ci controller
 
+      - name: Scan exact candidate images and tracked source
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/security-scan.sh qualification/security "${IMAGE_NAME}:ci" lightedge-controller:ci
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: lightedge-security-${{ needs.build-appliance.outputs.version }}
+          path: qualification/security/
+          retention-days: 7
+          if-no-files-found: warn
+
       - uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
         with:
           version: v3.19.0
@@ -287,6 +320,7 @@ jobs:
           # Run the chart variants also exercised by the manual controller check.
           helm lint deploy/kubernetes/helm/lightedge --set provider.url=https://edge.example.com:9443
           helm lint deploy/kubernetes/helm/lightedge --set appliance.enabled=true
+          helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'controller.secretNamespaces[0]=apps' >/dev/null
           helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true >/dev/null
           helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPPorts[0].port=8080,appliance.extraHTTPPorts[0].targetPort=18080,controller.extraHTTPPorts[0]=8080' >/dev/null
           helm template test deploy/kubernetes/helm/lightedge --set appliance.enabled=true --set 'appliance.extraHTTPSPorts[0].port=8443,appliance.extraHTTPSPorts[0].targetPort=18443,controller.extraHTTPSPorts[0]=8443' >/dev/null

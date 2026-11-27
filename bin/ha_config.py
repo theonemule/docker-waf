@@ -58,10 +58,13 @@ def atomic(path, value):
             os.unlink(name)
 
 @contextlib.contextmanager
-def file_lock(path):
-    with path.open("a") as handle:
-        fcntl.flock(handle,fcntl.LOCK_EX)
-        yield handle.fileno()
+def file_lock(path, timeout=None):
+    if timeout is None:
+        timeout = int(os.environ.get("LITEEDGE_LOCAL_LOCK_TIMEOUT_SECONDS", "60"))
+        if not 1 <= timeout <= 600:
+            raise HAError("LITEEDGE_LOCAL_LOCK_TIMEOUT_SECONDS must be between 1 and 600")
+    with shared_file_lock(path, timeout=timeout) as fd:
+        yield fd
 
 @contextlib.contextmanager
 def shared_file_lock(path, timeout=None, interval=0.2):
@@ -74,7 +77,10 @@ def shared_file_lock(path, timeout=None, interval=0.2):
         if not 1 <= timeout <= 600:
             raise HAError("LITEEDGE_HA_LOCK_TIMEOUT_SECONDS must be between 1 and 600")
     deadline = time.monotonic() + timeout
-    with path.open("a") as handle:
+    fd=os.open(path,os.O_CREAT|os.O_RDWR|os.O_NOFOLLOW|os.O_NONBLOCK,0o600)
+    with os.fdopen(fd,"a") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise HAError("Configuration lock must be a regular file")
         while True:
             try:
                 fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -82,7 +88,7 @@ def shared_file_lock(path, timeout=None, interval=0.2):
             except BlockingIOError:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise HAError("Timed out acquiring shared HA writer lock")
+                    raise HAError("Timed out acquiring configuration writer lock")
                 time.sleep(min(interval, remaining))
         yield handle.fileno()
 

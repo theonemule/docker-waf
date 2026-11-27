@@ -9,6 +9,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"bin"))
 import unittest
 import io
+import contextlib
 import subprocess
 from unittest.mock import patch
 import provider_admin as pa
@@ -422,6 +423,25 @@ class ProviderTest(unittest.TestCase):
         with self.assertRaises(p.Error):
             self.apply(render=lambda d: {"web.apps.example.test"})
         self.assertEqual(p.state(self.data,"cluster-a")["revision"],0)
+    def test_dns_backend_is_pinned_and_all_answers_scoped(self):
+        import ipaddress
+        policy={**self.policy,"backend_dns_suffixes":["svc.example.test"],"allow_request_mirroring":True}
+        desired=copy.deepcopy(self.payload)
+        route=desired["sites"][0]["routes"][0]
+        route["target"]="http://app.svc.example.test:8080"
+        route["mirrors"]=["http://app.svc.example.test:8081"]
+        with patch.object(p,"resolve_backend",return_value=[ipaddress.ip_address("10.96.0.6"),ipaddress.ip_address("10.96.0.5")]) as resolver:
+            normalized=p.normalize(desired,policy)[0]["routes"][0]
+            self.assertEqual(normalized["backends"][0]["target"],"http://10.96.0.5:8080")
+            self.assertEqual(normalized["mirrors"][0]["target"],"http://10.96.0.5:8081")
+            resolver.assert_called_once_with("app.svc.example.test")
+        for addresses in (["10.96.0.5","127.0.0.1"],["169.254.169.254"],["192.0.2.8"],[]):
+            with patch.object(p,"resolve_backend",return_value=list(map(ipaddress.ip_address,addresses))),self.assertRaises(p.Error) as exc:
+                p.normalize(desired,policy)
+            self.assertEqual(exc.exception.status,403)
+        with patch.object(p,"resolve_backend",return_value=[ipaddress.ip_address("10.96.0.5")]),self.assertRaises(p.Error):
+            p.normalize(desired,{**policy,"backend_cidrs":[]})
+
     def test_bearer_scoped(self):
         token="A"*43
         (self.data/"providers/cluster-a.json").write_text(json.dumps({**self.policy,"token_sha256":hashlib.sha256(token.encode()).hexdigest()}))
@@ -429,6 +449,40 @@ class ProviderTest(unittest.TestCase):
         for name, header in [("cluster-b","Bearer "+token),("cluster-a","Basic "+token),("cluster-a","Bearer "+"B"*43)]:
             with self.assertRaises(p.Error):
                 p.auth(self.data,name,header)
+    def test_cgi_preflight_rejects_before_configuration_lock(self):
+        token="A"*43
+        (self.data/"providers/cluster-a.json").write_text(json.dumps({**self.policy,"token_sha256":hashlib.sha256(token.encode()).hexdigest()}))
+        base={"PATH_INFO":"/api/v1/providers/cluster-a/state","HTTPS":"on","REQUEST_METHOD":"PUT",
+              "HTTP_AUTHORIZATION":"Bearer "+token,"CONTENT_TYPE":"application/json"}
+        for shared in (False,True):
+            for changes,raw,status in [
+                ({"HTTP_AUTHORIZATION":""},b"{}",401),
+                ({"HTTP_AUTHORIZATION":"Basic "+token},b"{}",401),
+                ({"CONTENT_TYPE":"text/plain"},b"{}",415),
+                ({"CONTENT_LENGTH":"9999999999"},b"{}",413),
+                ({},b'{"revision":0,"revision":1}',400),
+                ({},b'{"revision":NaN}',400),
+                ({},b'{"revision":',400),
+                ({"CONTENT_LENGTH":"4"},b"{}",400),
+            ]:
+                env={**base,"CONTENT_LENGTH":str(len(raw)),**changes}
+                output=io.StringIO()
+                with self.subTest(shared=shared,changes=changes,status=status), \
+                     patch.dict("os.environ",env,clear=True), \
+                     patch("ha_config.enabled",return_value=shared), \
+                     patch("ha_config.session") as session, patch.object(p,"locked") as locked, \
+                     patch("sys.stdin",io.TextIOWrapper(io.BytesIO(raw))), contextlib.redirect_stdout(output):
+                    p.cgi(self.data)
+                    self.assertTrue(output.getvalue().startswith(f"Status: {status}"),output.getvalue())
+                    session.assert_not_called()
+                    locked.assert_not_called()
+        output=io.StringIO()
+        with patch.dict("os.environ",{**base,"HTTP_AUTHORIZATION":"Bearer "+"B"*43},clear=True), \
+             patch("ha_config.enabled",return_value=False),patch.object(p,"locked") as locked,contextlib.redirect_stdout(output):
+            p.cgi(self.data)
+            self.assertTrue(output.getvalue().startswith("Status: 401"),output.getvalue())
+            locked.assert_not_called()
+
     def test_approved_profile_and_floor(self):
         self.policy["waf_profiles"]={"strict":{"min_waf_pl":3,"plugins":["approved-plugin"],"disabled_rules":[123456]}}
         self.policy["default_waf_profile"]="strict"

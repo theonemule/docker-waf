@@ -104,3 +104,17 @@ func TestCanceledRequest(t *testing.T) {
 		t.Fatalf("canceled request: %d", w.Code)
 	}
 }
+
+// Run the decoder against malformed, truncated and arbitrary control frames.
+func FuzzDecode(f *testing.F) {
+	f.Add(encoded(Config{Backends: []Backend{{"http://127.0.0.1:8080", 1}}}))
+	f.Add("")
+	f.Add("not-base64")
+	f.Add(base64.StdEncoding.EncodeToString([]byte(`{"backends":[]}`)))
+	f.Fuzz(func(t *testing.T, raw string) {
+		cfg, err := decode(raw)
+		if err == nil && (len(cfg.Backends) < 1 || len(cfg.Backends) > 16) {
+			t.Fatal("invalid accepted pool")
+		}
+	})
+}

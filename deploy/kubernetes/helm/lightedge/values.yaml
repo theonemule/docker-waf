@@ -15,6 +15,8 @@ provider:
   # the same Secret must also contain provider.json (hashed token and scopes).
   credentialsSecret: lightedge-provider
 controller:
+  # Restrict TLS Secret get permission to these namespaces; empty retains existing cluster-wide compatibility.
+  secretNamespaces: []
   name: blaize.net/lightedge-controller
   ingressClass: lightedge
   gatewayClass: lightedge
@@ -44,6 +46,10 @@ appliance:
   adminSecret: lightedge-admin
   adminTLSSecret: lightedge-admin-tls
   serviceType: LoadBalancer
+  # Only actual trusted forwarding proxies; empty by default.
+  trustedProxyCIDRs: []
+  # Temporary compatibility switch for legacy upstreams; migrate to verified TLS.
+  allowUnverifiedBackendTLS: false
   # Public port -> unprivileged container port, e.g. {port: 8080, targetPort: 18080}.
   extraHTTPPorts: []
   extraHTTPSPorts: []

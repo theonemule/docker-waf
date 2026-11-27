@@ -73,12 +73,13 @@ printf 'bundle_scope=%s bundle_host=%s\n' "${4:-}" "${5:-}"
 MOCK_BUNDLE
 chmod +x "$TMP/bundlectl.sh"
 sed -e 's@source /opt/liteedge/bin/common.sh@source "$LITEEDGE_TEST_COMMON"@' \
+    -e 's@/opt/liteedge/bin/admin_params.py@"$LITEEDGE_TEST_PARAMS"@' \
     -e 's@/opt/liteedge/bin/bundlectl.sh import@"$LITEEDGE_TEST_BUNDLECTL" import@' \
     "$ROOT/cgi/admin.sh" > "$TMP/admin.sh"
 chmod +x "$TMP/admin.sh"
 request_import() {
-  printf 'test' | PATH_INFO=/admin/import REQUEST_METHOD=POST CONTENT_LENGTH=4 \
-    QUERY_STRING="$1" LITEEDGE_CONFIG_LOCK_HELD=1 LITEEDGE_TEST_COMMON="$TMP/common.sh" \
+  printf 'test' | PATH_INFO=/admin/import REQUEST_METHOD=POST CONTENT_LENGTH=4 HTTP_X_LITEEDGE_API=1 \
+    QUERY_STRING="$1" LITEEDGE_CONFIG_LOCK_HELD=1 LITEEDGE_TEST_COMMON="$TMP/common.sh" LITEEDGE_TEST_PARAMS="$ROOT/bin/admin_params.py" \
     LITEEDGE_TEST_BUNDLECTL="$TMP/bundlectl.sh" "$TMP/admin.sh"
 }
 site_result="$(request_import 'scope=site&host=example.com&certificates=1')"

@@ -37,6 +37,9 @@ assert steps.index(cleanup) < next(i for i,s in enumerate(steps) if s.get("name"
 assert 'bash tests/qemu/cleanup-ci.sh "$QEMU_CI_SCOPE"' in cleanup["run"]
 assert "sha256sum -c SHA256SUMS" in raw
 assert "github.run_attempt" in raw
+assert "scripts/security-scan.sh" in raw and "govulncheck ./..." in raw
+assert "test-security-inputs.py" in raw
+assert "-fuzz FuzzDecode" in raw
 assert raw.count("Build standalone appliance payload from source") == 1
 assert raw.count("Rebuild Kubernetes controller from source") == 1
 assert "GITHUB_EVENT_NAME" in raw and '== push' in raw

@@ -123,6 +123,10 @@ spec:
         - name: appliance
           image: {{ .Values.appliance.image | quote }}
           env:
+            - name: LITEEDGE_ALLOW_UNVERIFIED_BACKEND_TLS
+              value: {{ ternary "1" "0" .Values.appliance.allowUnverifiedBackendTLS | quote }}
+            - name: LITEEDGE_TRUSTED_PROXY_CIDRS
+              value: {{ join "," .Values.appliance.trustedProxyCIDRs | quote }}
             - name: LITEEDGE_EXTRA_HTTP_PORTS
               value: {{ join "," $portMappings | quote }}
             - name: LITEEDGE_EXTRA_HTTPS_PORTS

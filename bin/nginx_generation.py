@@ -15,7 +15,7 @@ import subprocess
 
 NAME = re.compile(r"gen-[0-9a-f]{32}")
 FILES = ("nginx.conf", "admin.conf", "upstreams.conf", "route-limits.conf",
-         "streams.conf", "extra-listener-ports.conf", "modsecurity.conf",
+         "streams.conf", "extra-listener-ports.conf", "trusted-proxies.conf", "modsecurity.conf",
          "modsecurity-pre.conf", "modsecurity-main.conf",
          "modsecurity-wordpress.conf", "modsecurity-overrides.conf")
 TREES = ("sites", "waf-routes")
@@ -110,7 +110,7 @@ def stage(binary,config,runtime,marker,pass_fds=(),timeout=90):
             src=source/name
             if name=="nginx.conf":src=config
             # Old restored backups can lack an optional empty stream include.
-            if name=="streams.conf" and not src.exists():
+            if name in ("streams.conf", "trusted-proxies.conf") and not src.exists():
                 (candidate/name).touch(mode=0o600)
             else:copy_file(src,candidate/name)
         for name in TREES:

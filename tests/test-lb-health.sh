@@ -12,6 +12,8 @@ route_dir() { printf '%s/%s.routes' "$SITE_DIR" "$1"; }
 kv_get() { sed -n "s/^$2=//p" "$1" | head -1; }
 die() { echo "$*" >&2; exit 1; }
 COMMON
+# Exercise the real pinned-provider guard rather than stubbing it out.
+sed -n '/^provider_route_pinned() {$/,/^}$/p' "$ROOT/bin/common.sh" >> "$TMP/mock-common.sh"
 cat > "$SITE_DIR/qa.test.site" <<'SITE'
 HOST=qa.test
 ENABLED=1
@@ -36,6 +38,12 @@ HEALTH_COOLDOWN=30
 ROUTE
 source "$TMP/mock-common.sh"
 source "$ROOT/bin/poolctl.sh"
+# Legacy provider DNS entries must not be reached by a pool or health probe.
+printf '%s\n' 'PROVIDER_ROUTE=1' 'TARGET=http://app.example.test:8080' > "$TMP/old.route"
+if provider_route_pinned "$TMP/old.route";then echo "Unpinned DNS route accepted" >&2; exit 1;fi
+printf '%s\n' 'PROVIDER_ROUTE=1' 'TARGET=http://10.96.0.5:8080' > "$TMP/pinned.route"
+provider_route_pinned "$TMP/pinned.route"
+
 pool_render_upstreams "$TMP/upstreams.conf"
 grep -q 'least_conn;' "$TMP/upstreams.conf"
 [[ "$(grep -c 'server 127.0.0.1:' "$TMP/upstreams.conf")" == 2 ]]

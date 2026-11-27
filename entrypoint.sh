@@ -34,16 +34,24 @@ chmod 755 "$DATA_DIR/www"
 chmod 700 "$RUN_DIR"
 
 ADMIN_USER="${ADMIN_USER:-admin}"
+[[ "$ADMIN_USER" =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || {
+  echo "Invalid administrator username." >&2; exit 1;
+}
 
 if [[ ! -s "$DATA_DIR/auth/.htpasswd" ]]; then
   [[ -n "${ADMIN_PASSWORD:-}" ]] || {
     echo "ADMIN_PASSWORD is required on first start." >&2
     exit 1
   }
-  password_hash="$(openssl passwd -6 "$ADMIN_PASSWORD")"
+  [[ "$ADMIN_PASSWORD" != *$'\n'* && "$ADMIN_PASSWORD" != *$'\r'* ]] || {
+    echo "Administrator password cannot contain line breaks." >&2; exit 1;
+  }
+  password_hash="$(printf '%s\n' "$ADMIN_PASSWORD" | openssl passwd -6 -stdin)"
   printf '%s:%s\n' "$ADMIN_USER" "$password_hash" > "$DATA_DIR/auth/.htpasswd"
   chmod 600 "$DATA_DIR/auth/.htpasswd"
 fi
+# Do not pass bootstrap plaintext credentials to NGINX, CGI or workers.
+unset ADMIN_PASSWORD
 
 if [[ ! -s "$DATA_DIR/certs/_admin/fullchain.pem" || ! -s "$DATA_DIR/certs/_admin/privkey.pem" ]]; then
   mkdir -p "$DATA_DIR/certs/_admin"

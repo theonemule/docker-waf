@@ -50,7 +50,7 @@ The SPA uses the scoped endpoints for Sites, drill-down, route editing and the A
 
 NGINX requires HTTP Basic authentication for the SPA entry page, static assets, and every API call. It validates the administrator username and password on each request using the existing htpasswd store. The browser maintains its own Basic authentication credentials and automatically supplies Authorization on same-origin fetch requests (credentials same-origin). The UI does not read, persist, or transmit a JavaScript copy of the administrator password. The API does not return password hashes, SMTP passwords, or log-export tokens.
 
-Mutating calls require the X-LiteEdge-API: 1 header and reject cross-site Fetch Metadata and foreign Origin headers. There is no permissive CORS policy. API responses use Cache-Control: no-store. Use HTTPS in production.
+Mutating calls require the X-LiteEdge-API: 1 header and reject cross-site Fetch Metadata and foreign Origin headers. There is no permissive CORS policy. API responses use Cache-Control: no-store. Retained legacy POST form actions must also send the API header or an exact same-origin Origin header. Duplicate parameters and malformed encodings are rejected. Use HTTPS in production. See [security hardening](security-hardening.md) for limits, trusted proxy configuration and deployment considerations.
 
 Changing the administrator password invalidates old cached Basic credentials; a subsequent browser API request prompts for new credentials. Do not embed passwords in URLs or application JavaScript.
 

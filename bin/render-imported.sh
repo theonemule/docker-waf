@@ -114,10 +114,16 @@ emit_extra_route() {
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $liteedge_external_port;
+        proxy_set_header Forwarded "";
         proxy_redirect off;
 CONF
+  if [[ "$target" == https://* && "${LITEEDGE_ALLOW_UNVERIFIED_BACKEND_TLS:-0}" != 1 ]]; then
+    printf '%s\n' '        proxy_ssl_server_name on;' '        proxy_ssl_verify on;' '        proxy_ssl_verify_depth 8;' '        proxy_ssl_protocols TLSv1.2 TLSv1.3;' '        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;'
+  fi
   printf '        proxy_connect_timeout %ss;\n        proxy_send_timeout %ss;\n        proxy_read_timeout %ss;\n' "$timeout" "$timeout" "$timeout"
   if [[ "$websocket" == 1 ]]; then
     printf '        proxy_set_header Upgrade $http_upgrade;\n        proxy_set_header Connection $connection_upgrade;\n'

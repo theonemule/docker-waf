@@ -9,8 +9,13 @@ metadata:
   name: {{ printf "%s-%s" .Release.Namespace (include "lightedge.name" .) | trunc 63 | trimSuffix "-" }}
 rules:
   - apiGroups: [""]
-    resources: [services, secrets, namespaces]
+    resources: [services, namespaces]
     verbs: [get]
+{{- if not .Values.controller.secretNamespaces }}
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+{{- end }}
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
     verbs: [list]
@@ -80,3 +85,30 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "lightedge.name" . }}
     namespace: {{ .Release.Namespace }}
+
+{{- range $namespace := .Values.controller.secretNamespaces }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-%s-tls" $.Release.Namespace (include "lightedge.name" $) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $namespace | quote }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-%s-tls" $.Release.Namespace (include "lightedge.name" $) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ $namespace | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-%s-tls" $.Release.Namespace (include "lightedge.name" $) | trunc 63 | trimSuffix "-" }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "lightedge.name" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

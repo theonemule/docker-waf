@@ -63,6 +63,7 @@ pool_render_upstreams() {
     host="$(kv_get "$site" HOST)"
     for route in "$(route_dir "$host")"/*.route; do
       [[ -f "$route" ]] || continue
+      provider_route_pinned "$route" || continue
       # Deadline routes balance in the private worker, not in NGINX.
       if [[ -n "$(kv_get "$route" GW_DEADLINES_B64)" || -n "$(kv_get "$route" GW_RETRY_B64)" || -n "$(kv_get "$route" GW_BACKEND_TLS_PEERS_B64)" ]];then
         local deadline_config

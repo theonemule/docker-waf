@@ -51,21 +51,7 @@ validate_custom_rule() {
 custom_enabled_path() { printf '%s/%s.conf' "$WAF_CUSTOM_DIR" "$1"; }
 custom_disabled_path() { printf '%s/%s.conf.disabled' "$WAF_CUSTOM_DIR" "$1"; }
 
-safe_rule_archive() {
-  local archive="$1" name line type
-  [[ -s "$archive" ]] || die "Rules archive is empty."
-  tar -tzf "$archive" >/dev/null 2>&1 || die "Rules archive is not a valid .tar.gz file."
-  while IFS= read -r name; do
-    [[ "$name" == liteedge-waf || "$name" == liteedge-waf/* ]] ||
-      die "Rules archive contains an unexpected path."
-    [[ "$name" != *"/../"* && "$name" != ../* && "$name" != *"/.." ]] ||
-      die "Rules archive contains an unsafe path."
-  done < <(tar -tzf "$archive")
-  while IFS= read -r line; do
-    type="${line:0:1}"
-    case "$type" in -|d) ;; *) die "Rules archive contains an unsupported filesystem object." ;; esac
-  done < <(tar -tvzf "$archive")
-}
+
 
 case "$cmd" in
   set-pl)
@@ -176,10 +162,9 @@ EOF
   import)
     archive="${1:-}"
     [[ -f "$archive" ]] || die "Rules archive is required."
-    safe_rule_archive "$archive"
-    tmp="$(mktemp -d)"
+      tmp="$(mktemp -d)"
     trap 'rm -rf "$tmp"' EXIT
-    tar -xzf "$archive" -C "$tmp"
+    python3 /opt/liteedge/bin/archive_guard.py "$archive" "$tmp" --prefix liteedge-waf --compressed-mib 8 || die "Archive validation failed."
     root="$tmp/liteedge-waf"
     version="$(kv_get "$root/manifest" VERSION)"
     [[ "$(kv_get "$root/manifest" FORMAT)" == liteedge-waf-rules ]] || die "Unsupported OWASP rules bundle."

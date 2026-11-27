@@ -82,6 +82,9 @@ extra_ports="$(python3 /opt/liteedge/bin/listener_ports.py)" || die 'Invalid ext
   fi
 } | replace_file "$NGINX_DIR/extra-listener-ports.conf"
 
+trusted_proxies="$(python3 /opt/liteedge/bin/trusted_proxies.py)" || die "Invalid trusted proxy CIDRs."
+printf '%s\n' "$trusted_proxies" | replace_file "$NGINX_DIR/trusted-proxies.conf"
+
 data_esc="$(escape_sed "$DATA_DIR")"
 run_esc="$(escape_sed "$RUN_DIR")"
 resolver_esc="$(escape_sed "$RESOLVER")"

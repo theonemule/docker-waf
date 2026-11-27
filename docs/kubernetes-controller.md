@@ -26,9 +26,10 @@ a Kubernetes Secret. Example policy (replace the hash and scopes):
 ```
 
 Use restrictive host suffixes and backend CIDRs. DNS backends are opt-in via
-`backend_dns_suffixes`; only trust DNS zones under your control. The appliance
-must be able to reach selected backend addresses. Use separate credentials and
+`backend_dns_suffixes` and require `backend_cidrs` covering every resolved IPv4 address. The appliance pins a scoped address rather than re-resolving at request time. Use explicit weighted IP pools for multiple endpoints. Existing DNS routes fail closed until reconciliation. Only trust DNS zones under your control. The appliance must be able to reach selected backend addresses. Use separate credentials and
 non-overlapping host scopes for each cluster.
+
+For least privilege set `controller.secretNamespaces` to the namespaces containing frontend TLS Secrets; the default empty list retains cluster-wide Secret get for compatibility.
 
 Create namespace and Secret using files so token contents are not embedded in
 shell command arguments. The example assumes the token file contains the

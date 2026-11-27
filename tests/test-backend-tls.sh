@@ -5,10 +5,10 @@ cleanup(){ rc=$?;if ((rc));then cat "$tmp/response" 2>/dev/null||true;docker log
 trap cleanup EXIT
 password="$(openssl rand -hex 24)"
 for ca in trusted other;do openssl req -x509 -newkey rsa:2048 -nodes -days 2 -subj "/CN=$ca CA" -addext 'basicConstraints=critical,CA:TRUE' -keyout "$tmp/$ca.key" -out "$tmp/$ca.crt" >/dev/null 2>&1;done
-for peer in one two wrong;do
+for peer in one two wrong legacy;do
   dns=backend.example.test;[[ "$peer" != wrong ]]||dns=wrong.example.test
   openssl req -new -newkey rsa:2048 -nodes -subj "/CN=$dns" -keyout "$tmp/$peer.key" -out "$tmp/$peer.csr" >/dev/null 2>&1
-  printf 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:%s\nextendedKeyUsage=serverAuth\n' "$dns" >"$tmp/ext"
+  printf 'basicConstraints=critical,CA:FALSE\nsubjectAltName=DNS:%s,IP:127.0.0.1\nextendedKeyUsage=serverAuth\n' "$dns" >"$tmp/ext"
   openssl x509 -req -in "$tmp/$peer.csr" -CA "$tmp/trusted.crt" -CAkey "$tmp/trusted.key" -CAcreateserial -days 2 -extfile "$tmp/ext" -out "$tmp/$peer.crt" >/dev/null 2>&1
 done
 docker run -d --name "$name" -e ADMIN_PASSWORD="$password" -p 127.0.0.1::9443 -p 127.0.0.1::8080 "$image" >/dev/null
@@ -25,12 +25,12 @@ server=ThreadingHTTPServer(("127.0.0.1",int(sys.argv[1])),H)
 ctx=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER);ctx.load_cert_chain(sys.argv[2],sys.argv[3])
 def sni(sock,name,ctx):
     if name!="backend.example.test":return ssl.ALERT_DESCRIPTION_UNRECOGNIZED_NAME
-ctx.set_servername_callback(sni)
+if server.server_port!=12004:ctx.set_servername_callback(sni)
 server.socket=ctx.wrap_socket(server.socket,server_side=True)
 server.serve_forever()
 PY
 docker cp "$tmp/backend.py" "$name:/tmp/backend.py"
-for spec in one:12001 two:12002 wrong:12003;do
+for spec in one:12001 two:12002 wrong:12003 legacy:12004;do
   peer="${spec%:*}";port="${spec#*:}"
   for ext in crt key;do docker cp "$tmp/$peer.$ext" "$name:/tmp/$peer.$ext";docker exec -u 0 "$name" chown 10001:10001 "/tmp/$peer.$ext";done
   docker exec -d "$name" python3 /tmp/backend.py "$port" "/tmp/$peer.crt" "/tmp/$peer.key"
@@ -43,6 +43,11 @@ feature(){ jq -nc --arg host "$1" --rawfile ca "$2" '{backend_tls:{hostname:$hos
 trusted="$(feature backend.example.test "$tmp/trusted.crt")"
 untrusted="$(feature backend.example.test "$tmp/other.crt")"
 add(){ local path="$1" target="$2" f="$3";shift 3;api route/add -d host=backend-tls.example.test -d "path=$path" -d match=prefix -d "target=$target" -d force_https=0 -d waf=1 --data-urlencode "features_json=$f" "$@"; }
+test "$(add /legacy https://127.0.0.1:12004 '{}')" = 200
+# The endpoint accepts a TLS handshake without SNI, but its private CA
+# is not in the appliance trust store. Untyped HTTPS must fail closed.
+test "$(get -o /dev/null -w '%{http_code}' "$proxy/legacy")" = 502
+docker exec "$name" grep -q 'proxy_ssl_verify on;' /data/nginx/sites/backend-tls.example.test.conf
 test "$(add /good https://127.0.0.1:12001 "$trusted")" = 200
 test "$(add /pool https://127.0.0.1:12001 "$trusted" -d backends=https://127.0.0.1:12002)" = 200
 test "$(add /bad-ca https://127.0.0.1:12001 "$untrusted")" = 200

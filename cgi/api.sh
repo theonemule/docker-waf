@@ -194,6 +194,7 @@ api_full_backup_export() {
   local temp filename
   temp="$(mktemp -d "$DATA_DIR/.liteedge-backup-export.XXXXXXXX")" || api_failure 500 'Unable to stage backup.'
   chmod 700 "$temp"
+  trap 'rm -rf "$temp"' EXIT
   filename="liteedge-full-backup-$(date -u +%Y%m%dT%H%M%SZ).tar.gz"
   if ! /opt/liteedge/bin/backupctl.py backup "$temp/$filename" > "$temp/result.json" 2> "$temp/error"; then
     rm -rf "$temp"
@@ -205,6 +206,7 @@ api_full_backup_export() {
   printf 'Cache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n'
   cat "$temp/$filename"
   rm -rf "$temp"
+  trap - EXIT
   exit 0
 }
 api_full_backup_restore() {
@@ -213,6 +215,7 @@ api_full_backup_restore() {
   (( length > 0 && length <= 268435456 )) || api_failure 413 'Backup must be no larger than 256 MiB.'
   temp="$(mktemp -d "$DATA_DIR/.liteedge-backup-upload.XXXXXXXX")" || api_failure 500 'Unable to stage upload.'
   chmod 700 "$temp"
+  trap 'rm -rf "$temp"' EXIT
   head -c "$length" > "$temp/archive.tar.gz"
   if [[ "$(wc -c < "$temp/archive.tar.gz" | tr -d ' ')" != "$length" ]]; then
     rm -rf "$temp"
@@ -224,16 +227,13 @@ api_full_backup_restore() {
     api_failure 400 "Restore failed: $error"
   fi
   rm -rf "$temp"
+  trap - EXIT
   api_success "$result"
 }
 api_authz_mutation() {
-  [[ "${HTTP_X_LITEEDGE_API:-}" == 1 ]] || api_failure 403 'Mutation requires X-LiteEdge-API: 1.'
-  case "${HTTP_SEC_FETCH_SITE:-same-origin}" in same-origin|none) ;; *) api_failure 403 'Cross-site mutation denied.' ;; esac
-  if [[ -n "${HTTP_ORIGIN:-}" ]]; then
-    local origin="$HTTP_ORIGIN" expected="https://${HTTP_HOST:-}"
-    [[ "$origin" == "$expected" || "$origin" == "http://${HTTP_HOST:-}" ]] || api_failure 403 'Cross-origin mutation denied.'
-  fi
+  mutation_guard api
 }
+
 # Translate the existing binary import handlers' plain-text HTTP output into
 # a stable JSON result. Each handler runs in a subshell so its exit cannot
 # bypass the versioned API response contract; stdin streams the raw archive.

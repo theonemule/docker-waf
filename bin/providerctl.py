@@ -3,7 +3,6 @@
 import argparse
 import base64
 import contextlib
-import fcntl
 import hashlib
 import hmac
 import ipaddress
@@ -135,8 +134,8 @@ def write_kv(path, fields):
 @contextlib.contextmanager
 def locked(data):
     data.mkdir(parents=True, exist_ok=True)
-    with (data / ".liteedge-config.lock").open("a") as fd:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+    from ha_config import file_lock
+    with file_lock(data / ".liteedge-config.lock"):
         yield
 
 def auth(data, provider, header):
@@ -148,7 +147,25 @@ def auth(data, provider, header):
             "Unauthorized", 401)
     return policy
 
-def backend(value, policy, verified_tls=False):
+def address_allowed(ip, policy):
+    return (ip.version == 4 and not ip.is_loopback and not ip.is_link_local
+            and not ip.is_multicast and not ip.is_unspecified
+            and not ip.is_reserved
+            and any(ip in ipaddress.ip_network(net) for net in policy.get("backend_cidrs", [])))
+
+def resolve_backend(host):
+    # Bound the system resolver independently of libc/NSS retry settings.
+    # Use an argument, never shell expansion. No DNS lookup occurs in the
+    # traffic plane after authorization.
+    try:
+        output = subprocess.check_output([sys.executable, "-c",
+            "import socket,sys; print(' '.join(sorted({r[4][0] for r in socket.getaddrinfo(sys.argv[1],None,socket.AF_INET,socket.SOCK_STREAM)})))",
+            host], timeout=2, stderr=subprocess.DEVNULL)
+        return [ipaddress.ip_address(x) for x in output.decode("ascii").split()]
+    except (subprocess.SubprocessError, OSError, ValueError):
+        raise Error(403, "Backend DNS resolution failed") from None
+
+def backend(value, policy, verified_tls=False, cache=None):
     require(isinstance(value, str) and len(value) <= 512, "Invalid backend")
     try:
         parsed = urlsplit(value)
@@ -166,12 +183,19 @@ def backend(value, policy, verified_tls=False):
         hostname(host)
         require(scoped(host, policy.get("backend_dns_suffixes", [])),
                 "Backend DNS name outside provider scope", 403)
-    else:
-        require(ip.version == 4 and not ip.is_loopback and not ip.is_link_local
-                and not ip.is_multicast and not ip.is_unspecified
-                and any(ip in ipaddress.ip_network(net) for net in policy.get("backend_cidrs", [])),
-                "Backend address outside provider scope", 403)
-    return value
+        if cache is None:
+            cache = {}
+        if host not in cache:
+            require(len(cache) < 16, "Too many distinct backend DNS names", 403)
+            answers = resolve_backend(host)
+            require(0 < len(answers) <= 64 and all(address_allowed(a, policy) for a in answers),
+                    "Backend DNS resolves outside provider scope", 403)
+            # Pin a deterministic scoped answer. Explicit IP pools are
+            # required for multi-endpoint balancing.
+            cache[host] = min(answers)
+        ip = cache[host]
+    require(address_allowed(ip, policy), "Backend address outside provider scope", 403)
+    return f"{scheme}://{ip}:{port}"
 
 def certificate(host, tls, client_validated=False):
     strict(tls, ("certificate", "private_key"), ("certificate", "private_key"))
@@ -214,6 +238,7 @@ def normalize(payload, policy):
     except ValueError as e:raise Error(500,str(e)) from None
     result = {}
     total = 0
+    dns_cache = {}
     for field in ("host_suffixes","backend_dns_suffixes","redirect_host_suffixes","rewrite_host_suffixes"):
         if field in policy:
             value=policy[field]
@@ -273,9 +298,11 @@ def normalize(payload, policy):
                     if f["grpc"]:require(policy.get("allow_grpc") is True,"gRPC not approved for this provider",403,"grpc")
                     if f["mirrors"]:
                         require(policy.get("allow_request_mirroring") is True,"Request mirroring not approved for this provider",403,"mirrors")
-                        for mirror in f["mirrors"]:backend(mirror["target"],policy)
+                        for mirror in f["mirrors"]:mirror["target"]=backend(mirror["target"],policy,cache=dns_cache)
+                        require(len({m["target"] for m in f["mirrors"]})==len(f["mirrors"]),"Duplicate resolved mirror destination")
                     tls=f["backend_tls"]
                     peers=f["backend_tls_peers"]
+                    resolved_peers={}
                     if tls or peers:
                         require(policy.get("allow_backend_tls") is True,"Verified backend TLS not approved for this provider",403,"backend_tls")
                     redirect=f["redirect"]
@@ -297,14 +324,23 @@ def normalize(payload, policy):
                         pool = {}
                         for entry in entries:
                             strict(entry,("target","weight"),("target","weight"))
-                            target = entry["target"] if entry["target"] in ("invalid","unavailable") else backend(entry["target"],policy,bool(tls or entry["target"] in peers))
+                            original = entry["target"]
+                            require(isinstance(original,str),"Invalid backend target")
+                            target = original if original in ("invalid","unavailable") else backend(original,policy,bool(tls or original in peers),dns_cache)
+                            if original in peers:resolved_peers[target]=peers[original]
                             weight = entry["weight"]
                             require(type(weight) is int and 1 <= weight <= 1000000, "Invalid backend weight")
                             require(target not in pool, "Duplicate backend target")
                             pool[target] = weight
                         backends = [{"target":k,"weight":v} for k,v in sorted(pool.items())]
                     else:
-                        backends = [{"target":backend(route["target"],policy,bool(tls or route["target"] in peers)),"weight":1}]
+                        original=route["target"]
+                        require(isinstance(original,str),"Invalid backend target")
+                        target=backend(original,policy,bool(tls or original in peers),dns_cache)
+                        if original in peers:resolved_peers[target]=peers[original]
+                        backends = [{"target":target,"weight":1}]
+                    require(len(resolved_peers)==len(peers),"Unused or duplicate backend trust")
+                    peers=f["backend_tls_peers"]=resolved_peers
                     if tls:
                         try:features.validate_tls_targets(tls,[b["target"] for b in backends])
                         except ValueError as e:require(False,str(e),400,"backend_tls")
@@ -700,31 +736,43 @@ def unique_object(pairs):
 def cgi(data):
     try:
         path = os.environ.get("PATH_INFO","")
-        m = re.fullmatch(r"/api/v1/providers/([a-z0-9-]+)/state",path)
+        m = re.fullmatch(r"/api/v1/providers/([a-z0-9][a-z0-9-]{0,62})/state",path)
         require(m is not None, "Unknown endpoint", 404)
         provider = m.group(1)
-        # HTTPS only, including test deployments using the plaintext admin listener.
         require(os.environ.get("HTTPS") == "on", "HTTPS required", 403)
-        # The shared source serializes writes across members. A provider
-        # revision is read from the shared native files before applying CAS.
+        method = os.environ.get("REQUEST_METHOD","GET")
+        require(method in ("GET","PUT","POST"), "Method not allowed",405)
+        header = os.environ.get("HTTP_AUTHORIZATION","")
+        # Never enter HA synchronization or the writer lock for requests
+        # without a structurally valid bearer credential.
+        require(header.startswith("Bearer ") and TOKEN.fullmatch(header[7:]),
+                "Unauthorized",401)
         from ha_config import enabled, session
-        context = session(data) if enabled() else locked(data)
+        shared = enabled()
+        if not shared:
+            # Policy is atomically replaced; recheck under the lock below.
+            auth(data,provider,header)
+        payload = None
+        if method != "GET":
+            require(os.environ.get("CONTENT_TYPE","").split(";")[0] == "application/json",
+                    "JSON required",415)
+            length_text = os.environ.get("CONTENT_LENGTH","0")
+            require(re.fullmatch(r"[0-9]{1,7}",length_text) is not None,"Invalid request size",413)
+            length = int(length_text)
+            require(0 < length <= MAX_BODY,"Invalid request size",413)
+            raw = sys.stdin.buffer.read(length)
+            require(len(raw) == length,"Incomplete body")
+            payload = json.loads(raw, object_pairs_hook=unique_object,
+                                 parse_constant=lambda _: require(False,"Invalid JSON number"))
+            require(isinstance(payload,dict),"Expected JSON object")
+        # HA authentication must use the synchronized policy, not a stale
+        # replica's token after credential rotation.
+        context = session(data) if shared else locked(data)
         with context as ha:
-            method = os.environ.get("REQUEST_METHOD","GET")
-            if ha and method=="PUT":
-                ha.prepare_write()
-            policy = auth(data,provider,os.environ.get("HTTP_AUTHORIZATION",""))
+            policy = auth(data,provider,header)
             if method == "GET":
                 response = state(data,provider)
             elif method in ("PUT","POST"):
-                require(os.environ.get("CONTENT_TYPE","").split(";")[0] == "application/json",
-                        "JSON required",415)
-                length = int(os.environ.get("CONTENT_LENGTH","0"))
-                require(0 < length <= MAX_BODY,"Invalid request size",413)
-                raw = sys.stdin.buffer.read(length)
-                require(len(raw) == length,"Incomplete body")
-                payload = json.loads(raw, object_pairs_hook=unique_object)
-                require(isinstance(payload,dict),"Expected JSON object")
                 if method=="POST":
                     current,_,_=validate(data,provider,payload,policy)
                     response={**current,"changed":False}
@@ -777,12 +825,12 @@ def cgi(data):
                 "Conflicting route match":"ConflictingRoute",
             }
             response["rejection"]={**e.location,"reason":reasons.get(message,"InvalidConfiguration")}
-    except (ValueError,UnicodeError):
+    except (ValueError,UnicodeError,RecursionError):
         status,response = 400, {"ok":False,"error":"Invalid request"}
     except Exception as e:
         from ha_config import HAError
         status,response = (503 if isinstance(e,HAError) else 500), {"ok":False,"error":"Shared configuration unavailable or rejected" if isinstance(e,HAError) else "Provider operation failed"}
-    print(f"Status: {status}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n\r\n"+json.dumps(response),end="")
+    print(f"Status: {status}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\r\n"+json.dumps(response),end="")
 
 if __name__ == "__main__":
     data = Path(os.environ.get("DATA_DIR","/data"))

@@ -16,12 +16,12 @@ registry_ensure() {
 }
 
 registry_refresh() {
-  local raw tmp line name repo type status category
+  local raw tmp name repo type status category
   raw="$(mktemp)"
   tmp="$(mktemp)"
   trap 'rm -f "$raw" "$tmp"' RETURN
 
-  curl -fsSL --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 "$REGISTRY_URL" -o "$raw"
+  curl -fsSL --max-filesize 2097152 --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 "$REGISTRY_URL" -o "$raw"
 
   jq -e '
     .schema_version == 1
@@ -69,18 +69,7 @@ registry_row() {
   awk -F '\t' -v name="$name" 'NR > 1 && $1 == name {print; exit}' "$WAF_REGISTRY_FILE"
 }
 
-safe_archive() {
-  local archive="$1" line type name
-  tar -tzf "$archive" >/dev/null 2>&1 || die "Plugin download is not a valid tar.gz archive."
-  while IFS= read -r name; do
-    [[ "$name" != /* && "$name" != ../* && "$name" != *"/../"* && "$name" != *"/.." ]] ||
-      die "Plugin archive contains an unsafe path."
-  done < <(tar -tzf "$archive")
-  while IFS= read -r line; do
-    type="${line:0:1}"
-    case "$type" in -|d) ;; *) die "Plugin archive contains an unsupported filesystem object." ;; esac
-  done < <(tar -tvzf "$archive")
-}
+
 
 restore_plugin() {
   local name="$1" backup="${2:-}"
@@ -93,31 +82,46 @@ restore_plugin() {
 }
 
 plugin_install() {
-  local name="$1" row repo type status category api branch archive tmp root stage backup=""
+  local name="$1" row repo type status category api branch commit digest archive tmp root stage backup=""
   validate_plugin_name "$name"
   row="$(registry_row "$name")"
   [[ -n "$row" ]] || die "Plugin is not present in the current CRS registry catalog."
   IFS=$'\t' read -r _ repo type status category <<< "$row"
 
+  [[ "$repo" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || die "Invalid plugin repository."
   api="$(mktemp)"
   archive="$(mktemp)"
   tmp="$(mktemp -d)"
   stage="$(mktemp -d "$WAF_PLUGIN_DIR/.${name}.stage.XXXXXX")"
   trap 'rm -rf "$api" "$archive" "$tmp" "$stage"' RETURN
 
-  curl -fsSL --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 \
+  curl -fsSL --max-filesize 2097152 --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 \
     -H 'Accept: application/vnd.github+json' \
     "https://api.github.com/repos/$repo" -o "$api"
   branch="$(jq -r '.default_branch // empty' "$api")"
   [[ "$branch" =~ ^[A-Za-z0-9._/-]+$ ]] || die "Could not determine the plugin repository default branch."
 
-  curl -fL --retry 2 --connect-timeout 10 --max-time 60 --proto '=https' --tlsv1.2 \
-    -o "$archive" "https://github.com/$repo/archive/refs/heads/$branch.tar.gz"
-  safe_archive "$archive"
-  tar -xzf "$archive" -C "$tmp"
+  # Resolve the branch through GitHub to an immutable commit before fetching.
+  local ref
+  ref="$(jq -rn --arg ref "$branch" '$ref|@uri')"
+  curl -fsSL --max-filesize 2097152 --connect-timeout 10 --max-time 30 --proto '=https' --tlsv1.2 \
+    -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$repo/commits/$ref" -o "$api"
+  commit="$(jq -er '.sha' "$api")"
+  [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || die "Invalid plugin commit."
+  curl -fL --retry 2 --max-filesize 33554432 --connect-timeout 10 --max-time 60 --proto '=https' --tlsv1.2 \
+    -o "$archive" "https://github.com/$repo/archive/$commit.tar.gz"
+  digest="$(sha256sum "$archive" | cut -d' ' -f1)"
+  # Optional operator-maintained allowlist: repository, commit and exact SHA256.
+  # When supplied it is mandatory, with no automatic trust on first use.
+  if [[ -n "${LITEEDGE_PLUGIN_DIGEST_FILE:-}" ]];then
+    [[ -f "$LITEEDGE_PLUGIN_DIGEST_FILE" ]] || die "Plugin digest allowlist unavailable."
+    grep -Fxq "$repo $commit $digest" "$LITEEDGE_PLUGIN_DIGEST_FILE" ||
+      die "Plugin archive not approved by digest allowlist."
+  fi
+  python3 /opt/liteedge/bin/archive_guard.py "$archive" "$tmp"  || die "Archive validation failed."
 
   root="$(find "$tmp" -mindepth 1 -maxdepth 1 -type d | head -n1)"
-  [[ -n "$root" && -d "$root/plugins" ]] || die "Plugin bundle does not contain a plugins directory."
+  [[ -n "$root" && "$(basename "$root")" == "${repo#*/}-$commit" && -d "$root/plugins" ]] || die "Plugin bundle does not contain a plugins directory."
   find "$root/plugins" -type f -name '*.conf' -print -quit | grep -q . ||
     die "Plugin bundle does not contain ModSecurity plugin configuration files."
 
@@ -129,6 +133,8 @@ TYPE=$type
 STATUS=$status
 CATEGORY=$category
 BRANCH=$branch
+COMMIT=$commit
+ARCHIVE_SHA256=$digest
 META
 
   if [[ -d "$WAF_PLUGIN_DIR/$name" ]]; then

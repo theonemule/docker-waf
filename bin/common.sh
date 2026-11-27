@@ -82,6 +82,7 @@ assert_manual_site() {
   done
 }
 validate_host() {
+  [[ ${#1} -le 253 ]] || die "Host is too long."
   [[ "$1" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] ||
     die "Invalid host: $1"
 }
@@ -89,6 +90,25 @@ validate_host() {
 validate_aliases() {
   local aliases="${1//,/ }" item
   for item in $aliases; do validate_host "$item"; done
+}
+
+# Previously stored provider DNS targets must never be re-resolved by NGINX
+# or a health probe. Reconciliation replaces them with scoped literal IPs.
+provider_route_pinned() {
+  local route="$1" targets target mirrors
+  [[ "$(kv_get "$route" PROVIDER_ROUTE)" == 1 ]] || return 0
+  targets="$(kv_get "$route" TARGET),$(kv_get "$route" BACKENDS)"
+  if [[ -n "$(kv_get "$route" GW_MIRRORS_B64)" ]];then
+    mirrors="$(kv_get "$route" GW_MIRRORS_B64 | base64 -d | jq -er '[.[].target]|join(",")')" || return 1
+    targets+=",$mirrors"
+  fi
+  local -a endpoints=()
+  IFS=',' read -r -a endpoints <<< "$targets"
+  for target in "${endpoints[@]}";do
+    case "$target" in ""|invalid|unavailable) continue;; esac
+    [[ "$target" =~ ^https?://[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}:[0-9]{1,5}$ ]] || return 1
+  done
+  return 0
 }
 
 validate_mode() {
@@ -101,12 +121,18 @@ validate_upstream() {
 }
 
 validate_root() {
-  local value="$1"
+  local value="$1" resolved base
   [[ "$value" =~ ^/[A-Za-z0-9._/-]+$ ]] || die "Unsafe static root."
+  case "$value/" in
+    */../*|*/./*) die "Unsafe static root path components." ;;
+  esac
   case "$value" in
-    "$DATA_DIR"/www/*|/srv/*) ;;
+    "$DATA_DIR"/www/*) base="$(realpath -m "$DATA_DIR")/www" ;;
+    /srv/*) base="/srv" ;;
     *) die "Static root must be under $DATA_DIR/www or /srv." ;;
   esac
+  resolved="$(realpath -m -- "$value")" || die "Unable to resolve static root."
+  [[ "$resolved" == "$base/"* ]] || die "Static root escapes its permitted directory."
 }
 
 validate_waf_profile() {
@@ -138,7 +164,7 @@ validate_rule_id() {
 }
 
 validate_timeout() {
-  if [[ ! "${1:-}" =~ ^[0-9]+$ ]] || (( 10#${1} < 1 || 10#${1} > 86400 )); then
+  if [[ ! "${1:-}" =~ ^[0-9]{1,5}$ ]] || (( 10#${1} < 1 || 10#${1} > 86400 )); then
     die "Timeout must be between 1 and 86400 seconds."
   fi
 }
@@ -344,7 +370,7 @@ validate_route_headers() {
     [[ "$line" == *:* ]] || die 'Headers must be X-Name: value.'
     key="${line%%:*}"; val="${line#*:}"; val="${val# }"
     [[ "$key" =~ ^X-[a-zA-Z0-9-]+$ && -n "$val" && "${#val}" -le 256 ]] || die 'Invalid X-header name/value.'
-    case "${key,,}" in x-real-ip|x-forwarded-for|x-forwarded-proto|x-forwarded-host|x-liteedge-*) die 'Cannot override protected forwarding headers.';; esac
+    case "${key,,}" in x-real-ip|x-forwarded-*|x-liteedge-*) die 'Cannot override protected forwarding headers.';; esac
     printf '%s' "$val" | LC_ALL=C grep -Eq '^[a-zA-Z0-9_.,:/@+=% -]+$' || die 'Unsafe request header value.'
   done <<< "$value"
 }

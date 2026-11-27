@@ -14,6 +14,7 @@ mkdir -p "$STATE_DIR"
 probe_one() {
   local host="$1" route="$2" endpoint="$3" now="$4"
   local path interval timeout fall rise cooldown expect route_name origin code ok=0 next successes failures status last_down state key tmp action message
+  provider_route_pinned "$route" || return 0
   path="$(kv_get "$route" HEALTH_PATH)"; path="${path:-/health}"
   interval="$(kv_get "$route" HEALTH_INTERVAL)"; interval="${interval:-30}"
   timeout="$(kv_get "$route" HEALTH_TIMEOUT)"; timeout="${timeout:-5}"

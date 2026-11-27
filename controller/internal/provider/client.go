@@ -64,6 +64,7 @@ func New(endpoint, id, tokenFile, caFile string) (*Client, error) {
 		roots = x509.NewCertPool()
 	}
 	if caFile != "" {
+		roots = x509.NewCertPool()
 		pem, err := os.ReadFile(caFile)
 		if err != nil {
 			return nil, fmt.Errorf("read CA: %w", err)
@@ -75,6 +76,7 @@ func New(endpoint, id, tokenFile, caFile string) (*Client, error) {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: roots}
 	tr.Proxy = nil
+	tr.MaxResponseHeaderBytes = 128 << 10
 	return &Client{endpoint: strings.TrimRight(endpoint, "/") + "/api/v1/providers/" + id + "/state", tokenFile: tokenFile, http: &http.Client{Transport: tr, Timeout: 3 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
 }
 func (c *Client) request(ctx context.Context, method string, snapshot *model.Snapshot) (State, error) {

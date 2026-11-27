@@ -81,8 +81,11 @@ emit_proxy_headers() {
   fi
   cat <<'CONF'
         proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-For $remote_addr;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $liteedge_external_port;
+        proxy_set_header Forwarded "";
         proxy_redirect off;
 CONF
 }
@@ -325,8 +328,11 @@ emit_route_values() {
     printf '        grpc_pass $liteedge_grpc_%s;\n' "$id"
     echo '        grpc_set_header Host $http_host;'
     echo '        grpc_set_header X-Real-IP $remote_addr;'
-    echo '        grpc_set_header X-Forwarded-For $proxy_add_x_forwarded_for;'
+    echo '        grpc_set_header X-Forwarded-For $remote_addr;'
     echo '        grpc_set_header X-Forwarded-Proto $scheme;'
+    echo '        grpc_set_header X-Forwarded-Host $host;'
+    echo '        grpc_set_header X-Forwarded-Port $liteedge_external_port;'
+    echo '        grpc_set_header Forwarded "";'
     emit_managed_headers "$host" "$id" "${MANAGED_HEADERS_B64:-}" | sed "s/proxy_set_header/grpc_set_header/"
     if [[ -n "${MANAGED_BACKEND_TLS_CA:-}" ]];then
       echo '        grpc_ssl_server_name on;'
@@ -392,6 +398,12 @@ emit_route_values() {
     echo '        proxy_ssl_verify_depth 8;'
     echo '        proxy_ssl_protocols TLSv1.2 TLSv1.3;'
     printf '        proxy_ssl_trusted_certificate %s;\n' "$MANAGED_BACKEND_TLS_CA"
+  elif [[ "$target" == https://* && "${LITEEDGE_ALLOW_UNVERIFIED_BACKEND_TLS:-0}" != 1 ]];then
+    echo '        proxy_ssl_server_name on;'
+    echo '        proxy_ssl_verify on;'
+    echo '        proxy_ssl_verify_depth 8;'
+    echo '        proxy_ssl_protocols TLSv1.2 TLSv1.3;'
+    echo '        proxy_ssl_trusted_certificate /etc/ssl/certs/ca-certificates.crt;'
   fi
   if [[ -n "${MANAGED_DEADLINE_CONFIG:-}" ]];then
     echo '        proxy_next_upstream off;'
@@ -445,6 +457,17 @@ emit_route() {
     route_id="$(printf '%s\n%s\n%s' "$match" "$path" "$target" | sha256sum | cut -c1-16)"
   fi
   guard_zone="$(route_limit_zone "$host" "$route_id")"
+  if ! provider_route_pinned "$route";then
+    # Old DNS-based configuration is blocked until the owning controller
+    # resubmits it for scoped IP pinning. Preserve dispatch and other sites.
+    local blocked_location
+    if [[ "${MANAGED_DISPATCH:-0}" == 1 ]];then blocked_location="@le_route_$route_id"
+    else
+      case "$match" in exact) blocked_location="= $path";; regex) blocked_location="~ $path";; *) blocked_location="^~ $path";; esac
+    fi
+    printf '    location %s { return 503; }\n' "$blocked_location"
+    return 0
+  fi
 
   legacy_profile="$(route_value "$route" PROFILE "")"
   if [[ -z "$waf_plugins" && "$legacy_profile" == wordpress && -d "$WAF_PLUGIN_DIR/wordpress-rule-exclusions" ]]; then
